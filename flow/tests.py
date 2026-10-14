@@ -232,7 +232,7 @@ class FlowTests(TestCase):
   now=self.prepare_whatsapp()
   WhatsAppConfig.objects.filter(pk=1).update(send_times=['12:00','22:05','22:10'])
   with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
-   scheduled_send(now+timedelta(minutes=3));scheduled_send(now+timedelta(minutes=4))
+   scheduled_send(now-timedelta(minutes=4));scheduled_send(now+timedelta(minutes=3));scheduled_send(now+timedelta(minutes=4))
    self.assertEqual(send.call_count,2)
    scheduled_send(now-timedelta(hours=10,minutes=10))
    self.assertEqual(send.call_count,3)

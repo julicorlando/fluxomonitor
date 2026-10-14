@@ -1,4 +1,4 @@
-"""PFC event collector. Validate offset semantics before importing any counts."""
+"""PFC event collector. Validate pagination semantics before importing counts."""
 import hashlib,json,os
 from datetime import datetime,time,timedelta,timezone as utc
 from urllib.request import Request,urlopen
@@ -32,6 +32,10 @@ def fetch(camera,offset,quantity=100):
     if not isinstance(result,dict):raise ProtocolError('result inválido',diagnostic)
     if str(result.get('isError')).lower()!='false' or str(result.get('code'))!='0':
         raise ProtocolError('Equipamento recusou consulta: '+str(result.get('message','resposta inválida'))[:150],diagnostic)
+    # Firmware omits PassengerFlowData when a successful query has no records.
+    # Only accept the observed integer zero; malformed/nonempty replies stay errors.
+    if 'PassengerFlowData' not in data and type(data.get('rptQuantity')) is int and data['rptQuantity']==0:
+        return []
     events=data.get('PassengerFlowData')
     if not isinstance(events,list) or len(events)>quantity:raise ProtocolError('PassengerFlowData inválido',diagnostic)
     if data.get('rptQuantity')!=len(events):raise ProtocolError('rptQuantity divergente',diagnostic)

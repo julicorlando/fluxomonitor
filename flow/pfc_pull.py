@@ -44,7 +44,7 @@ def fetch(camera,offset,quantity=100):
         previous=e
     return events
 
-def locate_today(camera):
+def locate_today(camera,since=None):
     first=fetch(camera,0,2)
     if not first:return 0,'id'
     mode='id'
@@ -57,7 +57,7 @@ def locate_today(camera):
     else:
         probe=fetch(camera,first[0]['idIndex'],1)
         if not probe or probe[0]!=first[0]:raise ProtocolError('Não foi possível validar paginação por idIndex')
-    start=int(datetime.combine(timezone.now().astimezone(ZONE).date(),time.min,tzinfo=ZONE).timestamp())
+    start=int(datetime.combine(since or timezone.now().astimezone(ZONE).date(),time.min,tzinfo=ZONE).timestamp())
     base=first[0]['idIndex'] if mode=='id' else 0
     if first[0]['timestamp']>=start:return base,mode
     low,high=base,base+1

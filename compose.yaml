@@ -34,12 +34,20 @@ services:
   collector:
     build: .
     restart: unless-stopped
-    environment:
+    environment: &collector_env
       <<: *env
       PFC_SERVICE_SECRET: ${PFC_SERVICE_SECRET:?Configure PFC_SERVICE_SECRET}
       PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
       PFC_POLL_SECONDS: ${PFC_POLL_SECONDS:-5}
     command: ["python", "manage.py", "poll_pfc"]
+    depends_on:
+      web:
+        condition: service_started
+  history:
+    build: .
+    restart: unless-stopped
+    environment: *collector_env
+    command: ["python", "manage.py", "import_pfc_history"]
     depends_on:
       web:
         condition: service_started

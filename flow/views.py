@@ -2,7 +2,7 @@ import csv,hashlib,hmac,json
 from datetime import date,timedelta
 from functools import wraps
 from django.http import JsonResponse,HttpResponse
-from django.shortcuts import render
+from django.shortcuts import render,redirect,get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.csrf import csrf_exempt
 from django.db import transaction
@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from .models import Camera,ApiKey,RawDelivery,Reading,DailyReport
 from .services import report,close_day,ZONE
+from .forms import DeviceForm
 
 def access(scope):
     def deco(fn):
@@ -30,9 +31,14 @@ def health(request):return JsonResponse({'status':'ok'})
 def live(request):
     try:day=date.fromisoformat(request.GET.get('date',str(timezone.localdate())))
     except ValueError:return JsonResponse({'error':'Use date=AAAA-MM-DD'},status=400)
-    return JsonResponse(report(day))
+    data=report(day,request.api_key.camera_id if request.api_key else None)
+    data['devices']=data['cameras']
+    return JsonResponse(data)
 @access('read')
-def cameras(request):return JsonResponse({'cameras':list(Camera.objects.values('id','name','ip','serial','enabled','last_seen'))})
+def cameras(request):
+    qs=Camera.objects.all()
+    if request.api_key and request.api_key.camera_id:qs=qs.filter(pk=request.api_key.camera_id)
+    return JsonResponse({'cameras':list(qs.values('id','name','ip','serial','enabled','last_seen'))})
 @access('read')
 def history(request):
     try:
@@ -42,7 +48,7 @@ def history(request):
     except ValueError:return JsonResponse({'error':'Período inválido; máximo 367 dias'},status=400)
     days=[]
     while start<=end:
-        days.append(report(start));start+=timedelta(days=1)
+        days.append(report(start,request.api_key.camera_id if request.api_key else None));start+=timedelta(days=1)
     return JsonResponse({'days':days})
 @access('read')
 def export(request):
@@ -62,8 +68,8 @@ def ingest(request,heartbeat=False):
         if not isinstance(payload,dict):raise ValueError('JSON deve ser objeto')
         c=request.api_key.camera
         if not c:
-            c=Camera.objects.filter(pk=payload.get('camera_id'),enabled=True).first()
-        if not c or not c.enabled:raise ValueError('Câmera desconhecida')
+            c=Camera.objects.filter(pk=payload.get('device_id',payload.get('camera_id')),enabled=True).first()
+        if not c or not c.enabled:raise ValueError('Dispositivo desconhecido')
         with transaction.atomic():
             c=Camera.objects.select_for_update().get(pk=c.pk)
             c.last_seen=timezone.now();c.save(update_fields=['last_seen'])
@@ -87,3 +93,38 @@ def ingest(request,heartbeat=False):
             if day<timezone.localdate():close_day(day)
         return JsonResponse({'ok':True,'created':created},status=201 if created else 200)
     except (ValueError,TypeError,KeyError) as e:return JsonResponse({'error':str(e)},status=400)
+
+@login_required
+def manage_devices(request,device_id=None):
+    if not request.user.is_staff:return HttpResponse('Acesso restrito aos gestores',status=403)
+    obj=get_object_or_404(Camera,pk=device_id) if device_id else None
+    form=DeviceForm(request.POST or None,instance=obj)
+    if request.method=='POST' and form.is_valid():
+        form.save();return redirect('/devices/')
+    return render(request,'devices.html',{'form':form,'devices':Camera.objects.all(),'editing':obj})
+@access('read')
+def devices_api(request):
+    qs=Camera.objects.all()
+    if request.api_key and request.api_key.camera_id:qs=qs.filter(pk=request.api_key.camera_id)
+    return JsonResponse({'devices':list(qs.values('id','name','ip','serial','enabled','location','manufacturer','model','last_seen'))})
+@access('read')
+def device_api(request,device_id):
+    if request.api_key and request.api_key.camera_id and request.api_key.camera_id!=device_id:return JsonResponse({'error':'Sem permissão para este dispositivo'},status=403)
+    c=get_object_or_404(Camera,pk=device_id)
+    try:day=date.fromisoformat(request.GET.get('date',str(timezone.localdate())))
+    except ValueError:return JsonResponse({'error':'Use date=AAAA-MM-DD'},status=400)
+    latest=Reading.objects.filter(camera=c).order_by('-timestamp','-id').first()
+    data=report(day,c.id)
+    return JsonResponse({'device':{'id':c.id,'name':c.name,'ip':c.ip,'serial':c.serial,'location':c.location,'manufacturer':c.manufacturer,'model':c.model,'enabled':c.enabled,'last_seen':c.last_seen},'latest_counter':{'timestamp':latest.timestamp,'entries':latest.entries,'exits':latest.exits,'mode':latest.mode,'counter_epoch':latest.counter_epoch} if latest else None,'day':data})
+@access('read')
+def device_readings(request,device_id):
+    if request.api_key and request.api_key.camera_id and request.api_key.camera_id!=device_id:return JsonResponse({'error':'Sem permissão para este dispositivo'},status=403)
+    c=get_object_or_404(Camera,pk=device_id)
+    try:
+        limit=int(request.GET.get('limit','100'));before=int(request.GET.get('before','0'))
+        if not 1<=limit<=1000 or before<0:raise ValueError()
+    except ValueError:return JsonResponse({'error':'limit: 1–1000; before: ID positivo'},status=400)
+    qs=Reading.objects.filter(camera=c).order_by('-id')
+    if before:qs=qs.filter(id__lt=before)
+    rows=list(qs.values('id','event_id','timestamp','entries','exits','mode','counter_epoch')[:limit])
+    return JsonResponse({'device_id':c.id,'readings':rows,'next_before':rows[-1]['id'] if len(rows)==limit else None})

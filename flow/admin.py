@@ -1,7 +1,10 @@
 from django.contrib import admin
 from .models import Camera,ApiKey,RawDelivery,Reading,DailyReport
 admin.site.site_header='Axion • Fluxo'
-admin.site.register(Camera)
+@admin.register(Camera)
+class DeviceAdmin(admin.ModelAdmin):
+    list_display=('name','ip','location','enabled','last_seen')
+    search_fields=('name','ip','serial','location')
 @admin.register(ApiKey)
 class KeyAdmin(admin.ModelAdmin):
     exclude=('digest',)

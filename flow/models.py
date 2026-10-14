@@ -5,6 +5,13 @@ class Camera(models.Model):
     serial=models.CharField(max_length=100,unique=True,null=True,blank=True)
     enabled=models.BooleanField(default=True)
     last_seen=models.DateTimeField(null=True,blank=True)
+    location=models.CharField(max_length=150,blank=True)
+    manufacturer=models.CharField(max_length=100,blank=True)
+    model=models.CharField(max_length=100,blank=True)
+    api_url=models.URLField(blank=True,help_text='Endereço documentado da API web do equipamento; não consultado automaticamente.')
+    class Meta:
+        verbose_name='Dispositivo'
+        verbose_name_plural='Dispositivos'
     def __str__(self): return self.name
 class ApiKey(models.Model):
     name=models.CharField(max_length=100)

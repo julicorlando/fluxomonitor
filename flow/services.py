@@ -7,9 +7,9 @@ from .models import Camera,Reading,DailyReport
 ZONE=ZoneInfo('America/Sao_Paulo')
 def bounds(day):
     return datetime.combine(day,time.min,ZONE),datetime.combine(day+timedelta(days=1),time.min,ZONE)
-def report(day):
+def report(day,device_id=None):
     start,end=bounds(day); rows=[]; bins={}; warnings=[]
-    for c in Camera.objects.filter(enabled=True):
+    for c in Camera.objects.filter(enabled=True).filter(**({"id":device_id} if device_id else {})):
         records=list(Reading.objects.filter(camera=c,timestamp__lt=end).order_by('timestamp','id'))
         prev=None; ins=outs=0; cb={}
         for r in records:

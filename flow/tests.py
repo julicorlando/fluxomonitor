@@ -50,3 +50,25 @@ class FlowTests(TestCase):
   u=User.objects.create_user('tester',password='Strong-example-123');self.client.force_login(u)
   self.assertContains(self.client.get('/'),'Movimento em perspectiva')
  def test_invalid(self):self.assertEqual(self.send('a',-1,0).status_code,400)
+ def test_device_create_and_edit(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('manager',password='test',is_staff=True);self.client.force_login(u)
+  r=self.client.post('/devices/',{'name':'Contador 4','ip':'192.168.1.238','enabled':'on'})
+  self.assertEqual(r.status_code,302);self.assertTrue(Camera.objects.filter(ip='192.168.1.238').exists())
+  self.assertContains(self.client.get('/devices/'),'Contador 4')
+ def test_device_scope(self):
+  other=Camera.objects.create(name='Outro',ip='192.168.1.236')
+  r=self.client.get('/api/v1/devices/',**self.auth)
+  self.assertEqual(len(r.json()['devices']),1)
+  self.assertEqual(self.client.get(f'/api/v1/devices/{other.id}/',**self.auth).status_code,403)
+  self.assertEqual(self.client.get(f'/api/v1/devices/{other.id}/readings/',**self.auth).status_code,403)
+ def test_device_counter_api(self):
+  self.send('a',10,3)
+  r=self.client.get(f'/api/v1/devices/{self.c.id}/?date={self.day}',**self.auth)
+  self.assertEqual(r.json()['latest_counter']['entries'],10)
+  self.assertEqual(r.json()['day']['totals']['balance'],7)
+  self.assertEqual(len(self.client.get(f'/api/v1/devices/{self.c.id}/readings/',**self.auth).json()['readings']),1)
+ def test_device_management_restricted(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('viewer',password='test');self.client.force_login(u)
+  self.assertEqual(self.client.get('/devices/').status_code,403)

@@ -80,3 +80,15 @@ python manage.py test
 ```
 
 SQLite é somente o padrão para desenvolvimento; Compose usa PostgreSQL. Antes de produção valide Docker, Cloudflare, comunicação com equipamento e uma amostra JSON real. Não há implantação remota realizada automaticamente.
+
+## Dispositivos e API web
+
+Após redeploy, `/devices/` permite gestores (is_staff) adicionar, editar e desativar dispositivos. Sem limite de três. Campos: nome, IP, serial, local, fabricante, modelo e URL da API do equipamento. A estrutura Camera no banco permanece para preservar IDs, tokens e histórico; o nome público passa a Dispositivos.
+
+- GET `/api/v1/devices/`: cadastro de dispositivos.
+- GET `/api/v1/devices/1/?date=2026-10-14`: último contador recebido e totais do dia do dispositivo 1.
+- GET `/api/v1/devices/1/readings/?limit=100`: leituras com ID, horário, entradas, saídas, modo e ciclo. Paginação por `before=ID`.
+- POST de ingestão aceita `device_id`, preservando `camera_id` para compatibilidade.
+- Token associado a dispositivo só consulta seu dispositivo, inclusive totais e histórico. Tokens gerais consultam todos.
+
+API web do sistema = consultas HTTPS acima. API web do equipamento = endpoint do fabricante, ainda não confirmado. A URL cadastrada NÃO aciona coleta automática. Como o servidor não alcança a rede 192.168.1.x, consulta ativa exige VPN/rota ou coletor local. Precisamos de URL, autenticação e resposta real para implementar esse adaptador. Não abra as câmeras diretamente na internet.

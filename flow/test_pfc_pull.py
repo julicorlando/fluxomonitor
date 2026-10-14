@@ -66,10 +66,61 @@ class PullTests(TestCase):
     def test_rejected_response_preserved_after_rollback(self,open_url):
         import json
         from django.core.management import call_command
-        payload={'result':{'isError':'false','code':'0'},'rptQuantity':0}
+        payload={'result':{'isError':'false','code':'0'},'rptQuantity':1}
         open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
         call_command('poll_pfc',once=True)
         self.assertEqual(RawDelivery.objects.get().payload['response'],payload)
         self.assertEqual(RawDelivery.objects.get().payload['request']['getQuantity'],2)
         self.assertFalse(Reading.objects.exists())
         self.assertFalse(PullCursor.objects.get(camera=self.c).initialized)
+
+    @patch.dict(os.environ,{'PFC_SERVICE_SECRET':'test'})
+    @patch('flow.pfc_pull.urlopen')
+    def test_firmware_empty_reply_preserves_cursor_and_counts(self,open_url):
+        import json
+        from flow.pfc_pull import fetch
+        payload={'result':{'code':'0','isError':'false','message':'ask passenger flow data success'},'rptQuantity':0}
+        open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+        self.assertEqual(fetch(self.c,5788440,1),[])
+        state=PullCursor.objects.create(camera=self.c,initialized=True,index_mode='id',offset=5788440,last_error='PassengerFlowData inválido')
+        self.assertEqual(poll(self.c),0)
+        state.refresh_from_db();self.c.refresh_from_db()
+        self.assertEqual(state.offset,5788440)
+        self.assertEqual(state.last_error,'')
+        self.assertIsNotNone(state.last_success)
+        self.assertIsNotNone(self.c.last_seen)
+        self.assertFalse(Reading.objects.exists())
+
+    @patch.dict(os.environ,{'PFC_SERVICE_SECRET':'test'})
+    @patch('flow.pfc_pull.urlopen')
+    def test_empty_reply_still_rejects_inconsistent_payloads(self,open_url):
+        import json
+        from flow.pfc_pull import fetch
+        for extra in ({'rptQuantity':1},{'rptQuantity':False},{'rptQuantity':'0'},
+                      {'rptQuantity':0,'PassengerFlowData':None},
+                      {'rptQuantity':0,'PassengerFlowData':[self.event(1)]}):
+            with self.subTest(extra=extra):
+                payload={'result':{'code':'0','isError':'false'},**extra}
+                open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+                with self.assertRaises(ProtocolError):fetch(self.c,5788440,1)
+
+    @patch.dict(os.environ,{'PFC_SERVICE_SECRET':'test'})
+    @patch('flow.pfc_pull.urlopen')
+    def test_today_search_accepts_omitted_empty_pages(self,open_url):
+        import json
+        old=int((timezone.now()-timedelta(days=3)).timestamp())
+        events=[{'idIndex':i,'timestamp':old,'eventType':0} for i in range(100)]+[self.event(100)]
+        def reply(request,timeout):
+            params=json.loads(request.data)
+            page=events[params['startIndex']:params['startIndex']+params['getQuantity']]
+            payload={'result':{'code':'0','isError':'false'},'rptQuantity':len(page)}
+            if page:payload['PassengerFlowData']=page
+            from unittest.mock import MagicMock
+            response=MagicMock()
+            response.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+            return response
+        open_url.side_effect=reply
+        self.assertEqual(locate_today(self.c),(100,'offset'))
+        self.assertEqual(poll(self.c),1)
+        self.assertEqual(poll(self.c),0)
+        self.assertEqual(Reading.objects.count(),1)

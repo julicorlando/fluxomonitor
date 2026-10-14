@@ -33,6 +33,8 @@ def fetch(camera,offset,quantity=100):
     if str(result.get('isError')).lower()!='false' or str(result.get('code'))!='0':
         raise ProtocolError('Equipamento recusou consulta: '+str(result.get('message','resposta inválida'))[:150],diagnostic)
     events=data.get('PassengerFlowData')
+    if 'PassengerFlowData' not in data and type(data.get('rptQuantity')) is int and data['rptQuantity']==0:
+        events=[]
     if not isinstance(events,list) or len(events)>quantity:raise ProtocolError('PassengerFlowData inválido',diagnostic)
     if data.get('rptQuantity')!=len(events):raise ProtocolError('rptQuantity divergente',diagnostic)
     previous=None

@@ -66,10 +66,30 @@ class PullTests(TestCase):
     def test_rejected_response_preserved_after_rollback(self,open_url):
         import json
         from django.core.management import call_command
-        payload={'result':{'isError':'false','code':'0'},'rptQuantity':0}
+        payload={'result':{'isError':'false','code':'0'},'rptQuantity':1}
         open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
         call_command('poll_pfc',once=True)
         self.assertEqual(RawDelivery.objects.get().payload['response'],payload)
         self.assertEqual(RawDelivery.objects.get().payload['request']['getQuantity'],2)
         self.assertFalse(Reading.objects.exists())
         self.assertFalse(PullCursor.objects.get(camera=self.c).initialized)
+
+    @patch.dict(os.environ,{'PFC_SERVICE_SECRET':'test'})
+    @patch('flow.pfc_pull.urlopen')
+    def test_firmware_empty_page_omits_array(self,open_url):
+        import json
+        from flow.pfc_pull import fetch
+        payload={'result':{'isError':'false','code':'0','message':'ask passenger flow data success'},'rptQuantity':0}
+        open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+        self.assertEqual(fetch(self.c,5788440,1),[])
+
+    @patch('flow.pfc_pull.fetch')
+    def test_absolute_id_search_past_end_then_polls_today(self,fetch):
+        old=int((timezone.now()-timedelta(days=3)).timestamp())
+        events=[dict(idIndex=4739864+i,timestamp=old,eventType=0) for i in range(150)]
+        events += [self.event(4740014),self.event(4740015,kind=1)]
+        fetch.side_effect=lambda c,o,q:[e for e in events if e['idIndex']>=o][:q]
+        self.assertEqual(locate_today(self.c),(4740014,'id'))
+        self.assertEqual(poll(self.c),2)
+        self.assertEqual(Reading.objects.count(),2)
+        self.assertEqual(poll(self.c),0)

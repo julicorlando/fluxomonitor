@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Camera,ApiKey,RawDelivery,Reading,DailyReport
+from .models import Camera,ApiKey,RawDelivery,Reading,DailyReport,DeviceGroup
 admin.site.site_header='Axion • Fluxo'
 @admin.register(Camera)
 class DeviceAdmin(admin.ModelAdmin):
@@ -16,3 +16,5 @@ class RawAdmin(admin.ModelAdmin):
     def has_add_permission(self,request):return False
 admin.site.register(Reading)
 admin.site.register(DailyReport)
+
+admin.site.register(DeviceGroup)

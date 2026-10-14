@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<h1>Grupos de dispositivos</h1><form class="box" method="post">{% csrf_token %}{{ form.as_p }}<button>Adicionar grupo</button></form>{% for group in groups %}<article>{{ group.name }} · {{ group.camera_set.count }} dispositivos</article>{% endfor %}<p>Selecione o grupo ao editar cada dispositivo.</p>{% endblock %}

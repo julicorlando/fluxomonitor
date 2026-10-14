@@ -31,7 +31,13 @@ def health(request):return JsonResponse({'status':'ok'})
 def live(request):
     try:day=date.fromisoformat(request.GET.get('date',str(timezone.localdate())))
     except ValueError:return JsonResponse({'error':'Use date=AAAA-MM-DD'},status=400)
-    data=report(day,request.api_key.camera_id if request.api_key else None)
+    try:
+        requested=int(request.GET['device']) if request.GET.get('device') else None
+        group=int(request.GET['group']) if request.GET.get('group') else None
+    except ValueError:return JsonResponse({'error':'Filtro inválido'},status=400)
+    scoped=request.api_key.camera_id if request.api_key else None
+    if scoped and requested and scoped!=requested:return JsonResponse({'error':'Sem permissão'},status=403)
+    data=report(day,scoped or requested,group)
     data['devices']=data['cameras']
     return JsonResponse(data)
 @access('read')
@@ -106,7 +112,7 @@ def manage_devices(request,device_id=None):
 def devices_api(request):
     qs=Camera.objects.all()
     if request.api_key and request.api_key.camera_id:qs=qs.filter(pk=request.api_key.camera_id)
-    return JsonResponse({'devices':list(qs.values('id','name','ip','serial','enabled','location','manufacturer','model','last_seen'))})
+    return JsonResponse({'devices':list(qs.values('id','name','ip','serial','enabled','location','manufacturer','model','last_seen','group_id','include_in_total','expected_interval'))})
 @access('read')
 def device_api(request,device_id):
     if request.api_key and request.api_key.camera_id and request.api_key.camera_id!=device_id:return JsonResponse({'error':'Sem permissão para este dispositivo'},status=403)
@@ -128,3 +134,25 @@ def device_readings(request,device_id):
     if before:qs=qs.filter(id__lt=before)
     rows=list(qs.values('id','event_id','timestamp','entries','exits','mode','counter_epoch')[:limit])
     return JsonResponse({'device_id':c.id,'readings':rows,'next_before':rows[-1]['id'] if len(rows)==limit else None})
+
+@access('read')
+def groups_api(request):
+    from .models import DeviceGroup
+    qs=DeviceGroup.objects.all()
+    if request.api_key and request.api_key.camera_id:qs=qs.filter(camera=request.api_key.camera)
+    return JsonResponse({'groups':list(qs.values('id','name'))})
+
+@access('read')
+def demo_api(request):
+    from math import sin,pi
+    intervals=[{'time':f'{h:02d}:{m:02d}','passages':max(0,int(30*sin((h-7)*pi/14))) if 8<=h<=21 else 0} for h in range(24) for m in (0,15,30,45)]
+    cameras=[]
+    for i in range(1,4):
+        cameras.append({'id':i,'name':f'Demonstração {i}','entries':200*i,'exits':150*i,'balance':50*i,'passages':350*i,'online':True,'last_seen':timezone.now().isoformat(),'peak_15min':'14:00'})
+    # Keep chart and headline reconciled for demonstration.
+    total=sum(x['passages'] for x in intervals)
+    for c in cameras:c['passages']=0
+    each=total//3
+    for i,c in enumerate(cameras):
+        c['passages']=each+(total%3 if i==2 else 0);c['entries']=(c['passages']*3)//5;c['exits']=c['passages']-c['entries'];c['balance']=c['entries']-c['exits']
+    return JsonResponse({'demo':True,'date':str(timezone.localdate()),'cameras':cameras,'totals':{k:sum(c[k] for c in cameras) for k in ('entries','exits','balance','passages')},'intervals':intervals,'peak_hour':'14:00','warnings':['DEMONSTRAÇÃO — dados fictícios, sem gravação no banco.'],'updated_at':timezone.now().isoformat()})

@@ -92,3 +92,19 @@ Após redeploy, `/devices/` permite gestores (is_staff) adicionar, editar e desa
 - Token associado a dispositivo só consulta seu dispositivo, inclusive totais e histórico. Tokens gerais consultam todos.
 
 API web do sistema = consultas HTTPS acima. API web do equipamento = endpoint do fabricante, ainda não confirmado. A URL cadastrada NÃO aciona coleta automática. Como o servidor não alcança a rede 192.168.1.x, consulta ativa exige VPN/rota ou coletor local. Precisamos de URL, autenticação e resposta real para implementar esse adaptador. Não abra as câmeras diretamente na internet.
+
+## Gestão e análise
+
+- `/devices/ID/`: painel individual. Filtros por dispositivo e grupo no painel geral.
+- `/groups/`: agrupamentos; defina o grupo em cada cadastro.
+- `include_in_total`: escolha se o contador entra na soma consolidada. Consulta individual sempre contabiliza o dispositivo selecionado.
+- `expected_interval`: segundos entre leituras esperadas; online usa tolerância de três intervalos, mínimo 180 s.
+- `/diagnostics/`: último envio, status de processamento e JSON com chaves sensíveis ocultadas.
+- `/tokens/`: somente administradores; criação com escopos, segredo mostrado uma vez e revogação.
+- `/users/`: somente administradores; perfis consulta, operador e administrador. Consulta não altera dispositivos; operador administra dispositivos e vê diagnóstico; administrador gerencia tokens e usuários. Todos consultam todos os locais; isolamento por unidade não implementado.
+- `/reports/`: até 93 dias, comparação com período anterior de mesma duração, picos e alertas; exportação CSV para Excel e impressão/salvar PDF pelo navegador (não XLSX nem geração de PDF no servidor).
+- Tema claro/escuro salvo no navegador; botão TV usa tela cheia.
+- Ausência de leituras, gaps acima da tolerância e resets são indicados; cobertura observada não é certificação de precisão. Fechamento diário mantém alertas.
+- Sem dados de demonstração inseridos no banco de produção. Sem coleta ativa antes de protocolo confirmado.
+
+Demonstração: caixa no painel usa `/api/v1/demo/` com números fictícios identificados e sem gravação; exportação do painel fica oculta durante demonstração. Relatórios continuam sempre usando dados reais.

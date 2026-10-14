@@ -53,7 +53,7 @@ class FlowTests(TestCase):
  def test_device_create_and_edit(self):
   from django.contrib.auth.models import User
   u=User.objects.create_user('manager',password='test',is_staff=True);self.client.force_login(u)
-  r=self.client.post('/devices/',{'name':'Contador 4','ip':'192.168.1.238','enabled':'on'})
+  r=self.client.post('/devices/',{'name':'Contador 4','ip':'192.168.1.238','enabled':'on','include_in_total':'on','expected_interval':60})
   self.assertEqual(r.status_code,302);self.assertTrue(Camera.objects.filter(ip='192.168.1.238').exists())
   self.assertContains(self.client.get('/devices/'),'Contador 4')
  def test_device_scope(self):
@@ -72,3 +72,44 @@ class FlowTests(TestCase):
   from django.contrib.auth.models import User
   u=User.objects.create_user('viewer',password='test');self.client.force_login(u)
   self.assertEqual(self.client.get('/devices/').status_code,403)
+
+ def test_management_pages(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('root',password='test',is_staff=True,is_superuser=True);self.client.force_login(u)
+  for url in ['/reports/','/groups/','/tokens/','/users/','/diagnostics/',f'/devices/{self.c.id}/']:
+   self.assertEqual(self.client.get(url).status_code,200,url)
+ def test_token_revoke(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('root',password='test',is_staff=True,is_superuser=True);self.client.force_login(u)
+  r=self.client.post('/tokens/',{'name':'read','can_read':'on'})
+  self.assertContains(r,'Copie agora');key=ApiKey.objects.get(name='read')
+  self.client.post('/tokens/',{'revoke':key.id});key.refresh_from_db();self.assertFalse(key.enabled)
+ def test_operator_cannot_tokens(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('op',password='test',is_staff=True);self.client.force_login(u)
+  self.assertEqual(self.client.get('/tokens/').status_code,302)
+ def test_exclusion_and_gaps(self):
+  self.send('a',10,3);self.c.include_in_total=False;self.c.save()
+  self.assertEqual(report(self.day)['totals']['entries'],0)
+  d=report(self.day,self.c.id);self.assertEqual(d['totals']['entries'],10);self.assertTrue(d['cameras'][0]['coverage_gaps'])
+ def test_group_filter(self):
+  from .models import DeviceGroup
+  g=DeviceGroup.objects.create(name='Entrada');self.c.group=g;self.c.save();self.send('a',10,3)
+  self.assertEqual(report(self.day,group_id=g.id)['totals']['entries'],10)
+  self.assertEqual(report(self.day,group_id=999)['totals']['entries'],0)
+ def test_report_csv(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('v',password='test');self.client.force_login(u)
+  self.send('a',10,3)
+  r=self.client.get(f'/reports/?start={self.day}&end={self.day}&format=csv')
+  self.assertEqual(r.status_code,200);self.assertIn(b'10;3;7;13',r.content)
+ def test_demo_isolated(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('demo',password='test');self.client.force_login(u)
+  d=self.client.get('/api/v1/demo/').json()
+  self.assertTrue(d['demo']);self.assertEqual(Reading.objects.count(),0)
+  self.assertEqual(d['totals']['passages'],sum(x['passages'] for x in d['intervals']))
+ def test_viewer_cannot_diagnose(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('view',password='test');self.client.force_login(u)
+  self.assertEqual(self.client.get('/diagnostics/').status_code,302)

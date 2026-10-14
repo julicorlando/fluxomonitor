@@ -1,10 +1,16 @@
 from django.db import models
+class DeviceGroup(models.Model):
+    name=models.CharField(max_length=100,unique=True)
+    def __str__(self):return self.name
 class Camera(models.Model):
     name=models.CharField(max_length=100)
     ip=models.GenericIPAddressField(unique=True)
     serial=models.CharField(max_length=100,unique=True,null=True,blank=True)
     enabled=models.BooleanField(default=True)
     last_seen=models.DateTimeField(null=True,blank=True)
+    group=models.ForeignKey(DeviceGroup,null=True,blank=True,on_delete=models.SET_NULL)
+    include_in_total=models.BooleanField(default=True)
+    expected_interval=models.PositiveIntegerField(default=60,help_text='Intervalo esperado em segundos')
     location=models.CharField(max_length=150,blank=True)
     manufacturer=models.CharField(max_length=100,blank=True)
     model=models.CharField(max_length=100,blank=True)

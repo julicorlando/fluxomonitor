@@ -108,3 +108,9 @@ API web do sistema = consultas HTTPS acima. API web do equipamento = endpoint do
 - Sem dados de demonstração inseridos no banco de produção. Sem coleta ativa antes de protocolo confirmado.
 
 Demonstração: caixa no painel usa `/api/v1/demo/` com números fictícios identificados e sem gravação; exportação do painel fica oculta durante demonstração. Relatórios continuam sempre usando dados reais.
+
+## Operação
+
+Calendário em `/calendar/` (gestores): dias da semana e exceções fechadas; sem configuração = 24h. Alertas usam expediente e tolerância max(180s, 3×intervalo). Horários atravessando meia-noite ainda não suportados. As leituras fora do expediente são mantidas.
+`/alerts/`: falha e recuperação no painel, sem notificação externa. Avaliado pelo serviço closer a cada minuto. `/events/`: anotações por dia/grupo, mostradas nos relatórios. Ranking compara passagens de todos os dispositivos exibidos. `/audit/`: alterações de dispositivos, grupos, tokens, usuários, calendário e eventos com ator; senhas e digests excluídos. Alterações diretas por SQL não são auditadas. Alterações de grupos de usuários e permissões são registradas pelos IDs envolvidos; privilégios staff/superuser do usuário também entram.
+`/summaries/`: diários e semanais salvos idempotentemente após fechamento, sem envio externo; recomputados para leituras tardias. `/api/docs/`: endpoints, autenticação, exemplos Python e orientação Power BI. Não é console interativo/OpenAPI.

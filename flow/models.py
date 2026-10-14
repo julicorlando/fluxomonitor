@@ -48,3 +48,40 @@ class DailyReport(models.Model):
     day=models.DateField(unique=True)
     data=models.JSONField()
     updated_at=models.DateTimeField(auto_now=True)
+
+class OpeningHours(models.Model):
+    weekday=models.PositiveSmallIntegerField(unique=True,choices=[(0,'Segunda'),(1,'Terça'),(2,'Quarta'),(3,'Quinta'),(4,'Sexta'),(5,'Sábado'),(6,'Domingo')])
+    closed=models.BooleanField(default=False)
+    opens=models.TimeField(default='00:00')
+    closes=models.TimeField(default='23:59:59')
+class CalendarException(models.Model):
+    day=models.DateField(unique=True)
+    closed=models.BooleanField(default=True)
+    description=models.CharField(max_length=150)
+class FlowEvent(models.Model):
+    title=models.CharField(max_length=150)
+    day=models.DateField()
+    group=models.ForeignKey(DeviceGroup,null=True,blank=True,on_delete=models.SET_NULL)
+    notes=models.TextField(blank=True)
+class AuditLog(models.Model):
+    at=models.DateTimeField(auto_now_add=True)
+    actor=models.CharField(max_length=150,default='sistema')
+    action=models.CharField(max_length=20)
+    object_type=models.CharField(max_length=80)
+    object_id=models.CharField(max_length=80)
+    changes=models.JSONField(default=dict)
+class DeviceAlert(models.Model):
+    camera=models.ForeignKey(Camera,on_delete=models.CASCADE)
+    opened_at=models.DateTimeField()
+    resolved_at=models.DateTimeField(null=True,blank=True)
+    reason=models.CharField(max_length=150)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['camera'],condition=models.Q(resolved_at__isnull=True),name='one_open_alert_per_device')]
+class ScheduledSummary(models.Model):
+    kind=models.CharField(max_length=10)
+    start=models.DateField()
+    end=models.DateField()
+    generated_at=models.DateTimeField(auto_now=True)
+    data=models.JSONField()
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['kind','start','end'],name='unique_summary_period')]

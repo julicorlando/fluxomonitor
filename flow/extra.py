@@ -7,7 +7,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.http import HttpResponse
 from django.shortcuts import render,redirect,get_object_or_404
 from django.utils import timezone
-from .models import Camera,ApiKey,RawDelivery,Reading,DeviceGroup
+from .models import Camera,ApiKey,RawDelivery,Reading,DeviceGroup,FlowEvent
 from .services import report
 
 class TokenForm(forms.Form):
@@ -97,6 +97,15 @@ def reports(request):
         w=csv.writer(out,delimiter=';');w.writerow(['Data','Entradas','Saidas','Saldo','Passagens','Pico hora','Pico 15 min','Alertas'])
         for d in days:w.writerow([d['date'],*[d['totals'][k] for k in ('entries','exits','balance','passages')],d['peak_hour'],d['peak_15min'],' / '.join(d['warnings'])])
         return out
+    ranking={}
+    for d in days:
+        for c in d['cameras']:
+            item=ranking.setdefault(c['id'],{'name':c['name'],'passages':0,'included':c['include_in_total']});item['passages']+=c['passages']
+    ranked=sorted(ranking.values(),key=lambda x:x['passages'],reverse=True)
+    base=sum(x['passages'] for x in ranked)
+    for x in ranked:x['share']=round(x['passages']*100/base,1) if base else 0
+    events=FlowEvent.objects.filter(day__range=(start,end)).order_by('day')
+    if request.GET.get('group'):events=events.filter(group_id=request.GET['group'])
     total=sum(d['totals']['passages'] for d in days)
     previous=[]
     if days:
@@ -104,4 +113,4 @@ def reports(request):
         previous=[report(start-timedelta(days=i),device_id,group_id) for i in range(1,n+1)]
     prev_total=sum(d['totals']['passages'] for d in previous)
     qs=request.GET.copy();qs['format']='csv'
-    return render(request,'reports.html',{'days':days,'start':start,'end':end,'error':error,'total':total,'previous':prev_total,'difference':total-prev_total,'csv_query':qs.urlencode(),'devices':Camera.objects.all(),'groups':DeviceGroup.objects.all()})
+    return render(request,'reports.html',{'ranking':ranked,'events':events,'days':days,'start':start,'end':end,'error':error,'total':total,'previous':prev_total,'difference':total-prev_total,'csv_query':qs.urlencode(),'devices':Camera.objects.all(),'groups':DeviceGroup.objects.all()})

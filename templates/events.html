@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<h1>Eventos e campanhas</h1><form class="box" method="post">{% csrf_token %}{{ form.as_p }}<button>Registrar evento</button></form>{% for e in events %}<article><h2>{{ e.title }}</h2><p>{{ e.day }} · {{ e.group|default:'Todos os grupos' }}</p><p>{{ e.notes }}</p></article>{% endfor %}{% endblock %}

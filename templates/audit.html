@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<h1>Auditoria de alterações</h1><p>Últimas 200 alterações. Senhas e segredos não são registrados.</p>{% for log in logs %}<article>{{ log.at }} · {{ log.actor }} · {{ log.action }} · {{ log.object_type }} #{{ log.object_id }}<pre>{{ log.changes }}</pre></article>{% endfor %}{% endblock %}

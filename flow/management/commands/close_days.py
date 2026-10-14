@@ -5,6 +5,9 @@ from flow.models import Reading
 from flow.services import close_day,ZONE
 class Command(BaseCommand):
     def handle(self,*a,**kw):
+        from flow.operations import monitor_devices,generate_summaries
+        monitor_devices()
+        generate_summaries()
         first=Reading.objects.order_by('timestamp').first()
         if not first:return
         day=first.timestamp.astimezone(ZONE).date();today=timezone.localdate()

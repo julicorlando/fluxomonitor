@@ -18,3 +18,12 @@ admin.site.register(Reading)
 admin.site.register(DailyReport)
 
 admin.site.register(DeviceGroup)
+
+from .models import OpeningHours,CalendarException,FlowEvent,AuditLog,DeviceAlert,ScheduledSummary
+admin.site.register([OpeningHours,CalendarException,FlowEvent])
+@admin.register(AuditLog)
+class AuditAdmin(admin.ModelAdmin):
+    list_display=('at','actor','action','object_type','object_id')
+    def has_add_permission(self,r):return False
+    def has_change_permission(self,r,obj=None):return False
+    def has_delete_permission(self,r,obj=None):return False

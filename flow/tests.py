@@ -113,3 +113,40 @@ class FlowTests(TestCase):
   from django.contrib.auth.models import User
   u=User.objects.create_user('view',password='test');self.client.force_login(u)
   self.assertEqual(self.client.get('/diagnostics/').status_code,302)
+ def test_offline_and_recovery(self):
+  from .operations import monitor_devices
+  from .models import DeviceAlert
+  now=timezone.now().replace(hour=15,minute=0,second=0)
+  monitor_devices(now);monitor_devices(now)
+  self.assertEqual(DeviceAlert.objects.filter(resolved_at__isnull=True).count(),1)
+  self.c.last_seen=now;self.c.save();monitor_devices(now)
+  self.assertEqual(DeviceAlert.objects.filter(resolved_at__isnull=True).count(),0)
+ def test_closed_calendar_suppresses(self):
+  from .operations import monitor_devices
+  from .models import DeviceAlert,CalendarException
+  now=timezone.now();CalendarException.objects.create(day=now.astimezone(ZoneInfo('America/Sao_Paulo')).date(),description='Fechado')
+  monitor_devices(now);self.assertEqual(DeviceAlert.objects.count(),0)
+ def test_ops_pages(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('ops',password='test',is_staff=True,is_superuser=True);self.client.force_login(u)
+  for path in ['/calendar/','/events/','/audit/','/alerts/','/summaries/','/api/docs/']:
+   self.assertEqual(self.client.get(path).status_code,200,path)
+ def test_audit_actor_and_secret(self):
+  from django.contrib.auth.models import User
+  from .models import AuditLog
+  u=User.objects.create_user('auditor',password='test',is_staff=True,is_superuser=True);self.client.force_login(u)
+  self.client.post('/tokens/',{'name':'audited','can_read':'on'})
+  log=AuditLog.objects.filter(object_type='ApiKey').last()
+  self.assertEqual(log.actor,'auditor');self.assertNotIn('digest',log.changes)
+ def test_summary_idempotent(self):
+  from .operations import generate_summaries
+  from .models import ScheduledSummary
+  self.send('a',10,3);generate_summaries();n=ScheduledSummary.objects.count();generate_summaries()
+  self.assertEqual(ScheduledSummary.objects.count(),n)
+  self.assertEqual(ScheduledSummary.objects.get(kind='daily',start=self.day).data['totals']['entries'],10)
+ def test_events_and_ranking(self):
+  from django.contrib.auth.models import User
+  from .models import FlowEvent
+  FlowEvent.objects.create(title='Campanha',day=self.day);self.send('a',10,3)
+  u=User.objects.create_user('reports',password='test');self.client.force_login(u)
+  self.assertContains(self.client.get(f'/reports/?start={self.day}&end={self.day}'),'Campanha')

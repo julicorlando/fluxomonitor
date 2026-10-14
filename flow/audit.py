@@ -2,7 +2,7 @@ from contextvars import ContextVar
 from django.db.models.signals import pre_save,post_save,post_delete
 from django.dispatch import receiver
 from django.contrib.auth.models import User,Group
-from .models import Camera,ApiKey,DeviceGroup,FlowEvent,OpeningHours,CalendarException,AuditLog
+from .models import Camera,ApiKey,DeviceGroup,FlowEvent,OpeningHours,CalendarException,AuditLog,WhatsAppConfig
 actor=ContextVar('audit_actor',default='sistema')
 class AuditMiddleware:
     def __init__(self,get_response):self.get_response=get_response
@@ -10,7 +10,7 @@ class AuditMiddleware:
         token=actor.set(request.user.username if request.user.is_authenticated else 'anônimo')
         try:return self.get_response(request)
         finally:actor.reset(token)
-TRACKED=(Camera,ApiKey,DeviceGroup,FlowEvent,OpeningHours,CalendarException,User)
+TRACKED=(Camera,ApiKey,DeviceGroup,FlowEvent,OpeningHours,CalendarException,User,WhatsAppConfig)
 def values(obj):
     return {f.attname:str(getattr(obj,f.attname)) for f in obj._meta.concrete_fields if f.name not in ('password','digest','last_seen','last_login','api_url')}
 @receiver(pre_save)

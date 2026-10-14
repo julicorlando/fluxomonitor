@@ -85,3 +85,18 @@ class ScheduledSummary(models.Model):
     data=models.JSONField()
     class Meta:
         constraints=[models.UniqueConstraint(fields=['kind','start','end'],name='unique_summary_period')]
+
+class WhatsAppConfig(models.Model):
+    enabled=models.BooleanField(default=False)
+    chat_id=models.CharField(max_length=100,blank=True)
+    recipient_label=models.CharField(max_length=150,blank=True)
+    metric=models.CharField(max_length=20,default='entries',choices=[('entries','Entradas'),('passages','Entradas + saídas')])
+    send_at=models.TimeField(default='22:10')
+class WhatsAppDelivery(models.Model):
+    day=models.DateField(unique=True)
+    chat_id=models.CharField(max_length=100)
+    text=models.TextField()
+    status=models.CharField(max_length=30)
+    detail=models.CharField(max_length=250,blank=True)
+    gateway_id=models.CharField(max_length=150,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)

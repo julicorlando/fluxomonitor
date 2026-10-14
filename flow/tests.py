@@ -150,3 +150,55 @@ class FlowTests(TestCase):
   FlowEvent.objects.create(title='Campanha',day=self.day);self.send('a',10,3)
   u=User.objects.create_user('reports',password='test');self.client.force_login(u)
   self.assertContains(self.client.get(f'/reports/?start={self.day}&end={self.day}'),'Campanha')
+ def prepare_whatsapp(self):
+  from .models import WhatsAppConfig,RawDelivery
+  now=datetime.combine(timezone.localdate(),datetime.min.time(),ZoneInfo('America/Sao_Paulo'))+timedelta(hours=22,minutes=10)
+  self.c.last_seen=now;self.c.save()
+  raw=RawDelivery.objects.create(camera=self.c,payload={})
+  Reading.objects.create(camera=self.c,event_id='wa',timestamp=now-timedelta(minutes=1),entries=40,exits=12,mode='delta',raw=raw)
+  WhatsAppConfig.objects.create(pk=1,enabled=True,chat_id='5581999999999@c.us')
+  return now
+ def test_whatsapp_once(self):
+  from unittest.mock import patch
+  from .whatsapp import scheduled_send
+  from .models import WhatsAppDelivery
+  now=self.prepare_whatsapp()
+  with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
+   scheduled_send(now);scheduled_send(now)
+   self.assertEqual(send.call_count,1)
+   self.assertEqual(send.call_args.args[2]['text'],'Boa noite, fluxo final 40')
+  self.assertEqual(WhatsAppDelivery.objects.get().status,'accepted')
+ def test_whatsapp_unknown_no_retry(self):
+  from unittest.mock import patch
+  from .whatsapp import scheduled_send
+  from .models import WhatsAppDelivery
+  now=self.prepare_whatsapp()
+  with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',side_effect=TimeoutError) as send:
+   scheduled_send(now);scheduled_send(now+timedelta(minutes=1));self.assertEqual(send.call_count,1)
+  self.assertEqual(WhatsAppDelivery.objects.get().status,'unknown')
+ def test_whatsapp_missing_data(self):
+  from unittest.mock import patch
+  from .whatsapp import scheduled_send
+  from .models import WhatsAppDelivery
+  now=self.prepare_whatsapp();Reading.objects.all().delete()
+  with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway') as send:
+   scheduled_send(now);send.assert_not_called()
+  self.assertEqual(WhatsAppDelivery.objects.get().status,'skipped')
+ def test_whatsapp_time_and_offline(self):
+  from unittest.mock import patch
+  from .whatsapp import scheduled_send
+  from .models import WhatsAppDelivery
+  now=self.prepare_whatsapp()
+  with patch('flow.whatsapp.session_info',return_value={'status':'STOPPED'}),patch('flow.whatsapp.gateway') as send:
+   scheduled_send(now-timedelta(minutes=1));scheduled_send(now);scheduled_send(now+timedelta(minutes=11));send.assert_not_called()
+  self.assertEqual(WhatsAppDelivery.objects.count(),0)
+ def test_whatsapp_admin_page(self):
+  from unittest.mock import patch
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('waadmin',password='test',is_superuser=True,is_staff=True);self.client.force_login(u)
+  with patch('flow.whatsapp_views.session_info',return_value={'status':'STOPPED'}):
+   self.assertContains(self.client.get('/whatsapp/'),'22:10')
+ def test_whatsapp_form(self):
+  from .whatsapp_views import ConfigForm
+  form=ConfigForm({'enabled':'on','number':'+55 (81) 99999-9999','metric':'entries','send_at':'22:10'})
+  self.assertTrue(form.is_valid(),form.errors);self.assertEqual(form.cleaned_data['chat_id'],'5581999999999@c.us')

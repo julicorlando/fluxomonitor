@@ -5,6 +5,8 @@ services:
     ports:
       - "8086:8000"
     environment: &env
+      WAHA_URL: http://waha:3000
+      WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}
       SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY}
       DATABASE_URL: postgres://fluxo:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@db:5432/fluxo
       ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1
@@ -21,6 +23,16 @@ services:
     depends_on:
       web:
         condition: service_started
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_SWAGGER_ENABLED: "false"
+    volumes:
+      - fluxo_whatsapp:/app/.sessions
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -36,3 +48,4 @@ services:
       retries: 10
 volumes:
   fluxo_db:
+  fluxo_whatsapp:

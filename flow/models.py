@@ -78,6 +78,7 @@ class OpeningHours(models.Model):
     opens=models.TimeField(default='00:00')
     closes=models.TimeField(default='23:59:59')
 class CalendarException(models.Model):
+    is_holiday=models.BooleanField(default=False,verbose_name="Feriado / dia especial (fluxo final às 21h)")
     day=models.DateField(unique=True)
     closed=models.BooleanField(default=True)
     description=models.CharField(max_length=150)
@@ -110,6 +111,7 @@ class ScheduledSummary(models.Model):
         constraints=[models.UniqueConstraint(fields=['kind','start','end'],name='unique_summary_period')]
 
 class WhatsAppConfig(models.Model):
+    chat_ids=models.JSONField(default=list,blank=True)
     send_times=models.JSONField(default=list,blank=True)
     enabled=models.BooleanField(default=False)
     chat_id=models.CharField(max_length=100,blank=True)
@@ -126,7 +128,7 @@ class WhatsAppDelivery(models.Model):
     gateway_id=models.CharField(max_length=150,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
     class Meta:
-        constraints=[models.UniqueConstraint(fields=['day','scheduled_time'],name='unique_whatsapp_day_time')]
+        constraints=[models.UniqueConstraint(fields=['day','scheduled_time','chat_id'],name='unique_whatsapp_day_time_recipient')]
 
 class NativeWindow(models.Model):
     camera=models.ForeignKey(Camera,on_delete=models.PROTECT)

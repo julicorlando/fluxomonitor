@@ -17,7 +17,7 @@ class HoursForm(forms.ModelForm):
 class ExceptionForm(forms.ModelForm):
     class Meta:
         model=CalendarException
-        fields=['day','closed','description']
+        fields=['day','closed','is_holiday','description']
         widgets={'day':forms.DateInput(attrs={'type':'date'})}
 class EventForm(forms.ModelForm):
     class Meta:
@@ -35,7 +35,11 @@ def calendar(request):
             hours=HoursForm(request.POST,prefix='hours',instance=obj)
             if hours.is_valid():hours.save();return redirect('/calendar/')
         else:
-            exception=ExceptionForm(request.POST,prefix='exception')
+            raw_day=request.POST.get('exception-day')
+            from django.utils.dateparse import parse_date
+            parsed=parse_date(raw_day) if raw_day else None
+            obj=CalendarException.objects.filter(day=parsed).first() if parsed else None
+            exception=ExceptionForm(request.POST,prefix='exception',instance=obj)
             if exception.is_valid():exception.save();return redirect('/calendar/')
     return render(request,'calendar.html',{'hours_form':hours,'exception_form':exception,'hours':OpeningHours.objects.order_by('weekday'),'exceptions':CalendarException.objects.order_by('-day')[:100]})
 @login_required

@@ -1,10 +1,12 @@
 from django.db import models
+from django.core.exceptions import ValidationError
 class DeviceGroup(models.Model):
     name=models.CharField(max_length=100,unique=True)
     def __str__(self):return self.name
 class Camera(models.Model):
     name=models.CharField(max_length=100)
-    ip=models.GenericIPAddressField(unique=True)
+    ip=models.GenericIPAddressField()
+    replica_slot=models.PositiveSmallIntegerField(default=0,editable=False)
     serial=models.CharField(max_length=100,unique=True,null=True,blank=True)
     enabled=models.BooleanField(default=True)
     last_seen=models.DateTimeField(null=True,blank=True)
@@ -15,7 +17,28 @@ class Camera(models.Model):
     manufacturer=models.CharField(max_length=100,blank=True)
     model=models.CharField(max_length=100,blank=True)
     api_url=models.URLField(blank=True,help_text='Endereço documentado da API web do equipamento; não consultado automaticamente.')
+    def _assign_replica_slot(self):
+        others=Camera.objects.filter(ip=self.ip).exclude(pk=self.pk)
+        if self.ip=='192.168.1.237':
+            used=set(others.values_list('replica_slot',flat=True))
+            if len(used)>=2:raise ValidationError({'ip':'O IP 192.168.1.237 permite no máximo dois cadastros.'})
+            if self.replica_slot in used:self.replica_slot=next(i for i in (0,1) if i not in used)
+        else:
+            self.replica_slot=0
+            if others.exists():raise ValidationError({'ip':'Este IP já está cadastrado. Somente 192.168.1.237 permite dois cadastros.'})
+    def clean(self):
+        super().clean()
+        self._assign_replica_slot()
+    def save(self,*args,**kwargs):
+        self._assign_replica_slot()
+        if kwargs.get('update_fields') is not None and 'ip' in kwargs['update_fields']:
+            kwargs['update_fields']=set(kwargs['update_fields'])|{'replica_slot'}
+        super().save(*args,**kwargs)
     class Meta:
+        constraints=[
+            models.UniqueConstraint(fields=['ip','replica_slot'],name='unique_ip_replica_slot'),
+            models.CheckConstraint(condition=models.Q(replica_slot=0)|(models.Q(ip='192.168.1.237')&models.Q(replica_slot=1)),name='only_237_second_slot'),
+        ]
         verbose_name='Dispositivo'
         verbose_name_plural='Dispositivos'
     def __str__(self): return self.name

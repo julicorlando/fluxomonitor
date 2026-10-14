@@ -93,3 +93,31 @@ class PullTests(TestCase):
         self.assertEqual(poll(self.c),2)
         self.assertEqual(Reading.objects.count(),2)
         self.assertEqual(poll(self.c),0)
+
+    def test_only_237_can_be_registered_twice(self):
+        from django.core.exceptions import ValidationError
+        from flow.forms import DeviceForm
+        Camera.objects.create(ip='192.168.1.237',name='Original')
+        second=Camera(name='Replica',ip='192.168.1.237')
+        second.full_clean();second.save()
+        self.assertEqual(second.replica_slot,1)
+        with self.assertRaises(ValidationError):Camera.objects.create(ip='192.168.1.237',name='Terceiro')
+        with self.assertRaises(ValidationError):Camera.objects.create(ip=self.c.ip,name='Duplicado')
+        from django.core.management import call_command
+        call_command('seed_cameras')
+        self.assertEqual(Camera.objects.filter(ip='192.168.1.237').count(),2)
+
+    @patch('flow.pfc_pull.fetch')
+    @patch('flow.pfc_pull.locate_today',return_value=(0,'offset'))
+    def test_replica_copies_counts_once_without_network(self,locate,fetch):
+        from flow.pfc_pull import mirror
+        source=Camera.objects.create(name='Entrada A',ip='192.168.1.237')
+        target=Camera.objects.create(name='Entrada B',ip='192.168.1.237')
+        fetch.return_value=[self.event(10),self.event(11,kind=1)]
+        poll(source);source.refresh_from_db()
+        fetch.reset_mock()
+        self.assertEqual(mirror(source,target),2)
+        self.assertEqual(mirror(source,target),0)
+        fetch.assert_not_called()
+        self.assertEqual(Reading.objects.filter(camera=target).count(),2)
+        self.assertEqual(sum(Reading.objects.values_list('entries',flat=True)),2)

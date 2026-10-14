@@ -2,7 +2,7 @@ import os,time,logging
 from django.core.management.base import BaseCommand,CommandError
 from django.db import close_old_connections
 from flow.models import Camera,PullCursor,RawDelivery
-from flow.pfc_pull import poll
+from flow.pfc_pull import poll,mirror
 
 class Command(BaseCommand):
     help='Consulta eventos PFC com assinatura validada no firmware do equipamento'
@@ -17,10 +17,16 @@ class Command(BaseCommand):
             cameras=list(Camera.objects.filter(enabled=True,ip__in=ips))
             missing=set(ips)-{c.ip for c in cameras}
             if missing:logging.error('IPs ausentes ou desativados: %s',','.join(sorted(missing)))
-            for camera in cameras:
+            sources={}
+            for camera in sorted(cameras,key=lambda c:(c.replica_slot,c.pk)):
                 close_old_connections()
                 try:
-                    count=poll(camera)
+                    if camera.ip in sources:
+                        count=mirror(sources[camera.ip],camera)
+                    else:
+                        count=poll(camera)
+                        camera.refresh_from_db(fields=["last_seen"])
+                        sources[camera.ip]=camera
                     self.stdout.write(f'{camera.ip}: {count} eventos consultados',ending='\n')
                 except Exception as error:
                     close_old_connections()

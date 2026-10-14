@@ -107,3 +107,23 @@ def poll(camera):
         for day in changed_days:
             if day<now.astimezone(ZONE).date():close_day(day)
         return len(events)
+
+def mirror(source,target):
+    """Copy confirmed readings; the second .237 registration never polls hardware."""
+    with transaction.atomic():
+        target=Camera.objects.select_for_update().get(pk=target.pk)
+        if source.ip!='192.168.1.237' or target.ip!=source.ip or source.pk==target.pk:raise ProtocolError('Réplica permitida somente para dois cadastros de .237')
+        if NativeWindow.objects.filter(camera=target).exists() or Reading.objects.filter(camera=target).exclude(event_id__startswith='pfc-event:').exists():raise ProtocolError('Réplica possui outra fonte de contagem')
+        missing=Reading.objects.filter(camera=source).exclude(event_id__in=Reading.objects.filter(camera=target).values('event_id')).select_related('raw')
+        raw_map={};days=set();count=0
+        for reading in missing.iterator():
+            if reading.raw_id not in raw_map:
+                raw_map[reading.raw_id]=RawDelivery.objects.create(camera=target,payload={'source':'pfc-replica','source_device_id':source.pk,'original':reading.raw.payload},status='pull_replica')
+            Reading.objects.create(camera=target,event_id=reading.event_id,timestamp=reading.timestamp,entries=reading.entries,exits=reading.exits,mode=reading.mode,counter_epoch=reading.counter_epoch,raw=raw_map[reading.raw_id])
+            days.add(reading.timestamp.astimezone(ZONE).date());count+=1
+        state=PullCursor.objects.get(camera=source)
+        PullCursor.objects.update_or_create(camera=target,defaults={'offset':state.offset,'last_id':state.last_id,'index_mode':state.index_mode,'initialized':state.initialized,'last_success':state.last_success,'last_error':''})
+        target.last_seen=source.last_seen;target.save(update_fields=['last_seen'])
+        for day in days:
+            if day<timezone.now().astimezone(ZONE).date():close_day(day)
+        return count

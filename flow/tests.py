@@ -242,3 +242,19 @@ class FlowTests(TestCase):
  def test_native_scoped(self):
   p=self.native_payload();other=Camera.objects.create(name='Outro',ip='192.168.1.236',serial='another')
   p['sn']=other.serial;self.assertEqual(self.native_post(p).status_code,403)
+ def test_device_token_generation(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('tokenadmin',password='test',is_superuser=True,is_staff=True);self.client.force_login(u)
+  self.c.serial='serial-one';self.c.save()
+  url=f'/devices/{self.c.id}/token/'
+  self.assertEqual(self.client.get(url).status_code,405)
+  r=self.client.post(url);self.assertContains(r,'/api/camera/dataUpload/')
+  k=ApiKey.objects.get(name=f'push-device-{self.c.id}')
+  self.assertTrue(k.can_ingest);self.assertFalse(k.can_read);self.assertEqual(k.camera_id,self.c.id)
+  self.client.post(url);k.refresh_from_db();self.assertFalse(k.enabled)
+  self.assertEqual(ApiKey.objects.filter(name=k.name,enabled=True).count(),1)
+  self.assertTrue(ApiKey.objects.get(name='test').enabled)
+ def test_device_token_needs_serial(self):
+  from django.contrib.auth.models import User
+  u=User.objects.create_user('serialadmin',password='test',is_superuser=True,is_staff=True);self.client.force_login(u)
+  self.assertEqual(self.client.post(f'/devices/{self.c.id}/token/').status_code,400)

@@ -114,3 +114,22 @@ def reports(request):
     prev_total=sum(d['totals']['passages'] for d in previous)
     qs=request.GET.copy();qs['format']='csv'
     return render(request,'reports.html',{'ranking':ranked,'events':events,'days':days,'start':start,'end':end,'error':error,'total':total,'previous':prev_total,'difference':total-prev_total,'csv_query':qs.urlencode(),'devices':Camera.objects.all(),'groups':DeviceGroup.objects.all()})
+
+@login_required
+@user_passes_test(lambda u:u.is_superuser)
+def device_token(request,device_id):
+    from django.db import transaction
+    c=get_object_or_404(Camera,pk=device_id)
+    if request.method!='POST':return HttpResponse('Use o botão Gerar token no dispositivo.',status=405)
+    if not c.serial:return HttpResponse('Cadastre o número de série do dispositivo antes de gerar o token.',status=400)
+    token=secrets.token_urlsafe(32)
+    with transaction.atomic():
+        c=Camera.objects.select_for_update().get(pk=c.pk)
+        # Only replace tokens issued by this dedicated action. Other keys remain intact.
+        name=f'push-device-{c.id}'
+        for key in ApiKey.objects.filter(camera=c,name=name,enabled=True):
+            key.enabled=False;key.save(update_fields=['enabled'])
+        ApiKey.objects.create(name=name,camera=c,digest=hashlib.sha256(token.encode()).hexdigest(),can_ingest=True,can_read=False)
+    response=render(request,'device_token.html',{'device':c,'token':token,'data_path':'/api/camera/dataUpload/'+token,'heartbeat_path':'/api/camera/heartBeat/'+token})
+    response['Cache-Control']='no-store';response['Referrer-Policy']='no-referrer'
+    return response

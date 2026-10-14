@@ -1,0 +1,90 @@
+"""PFC event collector. Validate offset semantics before importing any counts."""
+import hashlib,json,os
+from datetime import datetime,time,timedelta,timezone as utc
+from urllib.request import Request,urlopen
+from django.db import transaction
+from django.utils import timezone
+from .models import Camera,PullCursor,RawDelivery,Reading,NativeWindow
+from .services import ZONE,close_day
+
+PATH='passengerFlow/passengerFlowData/PassengerFlowDataGet'
+class ProtocolError(ValueError):pass
+
+def signature(params,secret):
+    if not secret:raise ProtocolError('PFC_SERVICE_SECRET obrigatório')
+    source=''.join(str(k)+str(params[k]) for k in sorted(params))+secret
+    return hashlib.md5(source.encode()).hexdigest().upper()
+
+def fetch(camera,offset,quantity=100):
+    params={'startIndex':offset,'getQuantity':quantity}
+    req=Request(f'http://{camera.ip}:8020/{PATH}',data=json.dumps(params,separators=(',',':')).encode(),method='POST',headers={'Accept':'application/json','Content-Type':'application/json;charset=utf-8','Sign':signature(params,os.environ.get('PFC_SERVICE_SECRET',''))})
+    with urlopen(req,timeout=8) as response:
+        body=response.read(1048577)
+    if len(body)>1048576:raise ProtocolError('Resposta acima de 1 MiB')
+    data=json.loads(body)
+    result=data.get('result',{})
+    if str(result.get('isError')).lower()!='false' or str(result.get('code'))!='0':
+        raise ProtocolError('Equipamento recusou consulta: '+str(result.get('message','resposta inválida'))[:150])
+    events=data.get('PassengerFlowData')
+    if not isinstance(events,list) or len(events)>quantity:raise ProtocolError('PassengerFlowData inválido')
+    if data.get('rptQuantity')!=len(events):raise ProtocolError('rptQuantity divergente')
+    previous=None
+    for e in events:
+        if not isinstance(e,dict) or any(type(e.get(k)) is not int or e[k]<0 for k in ('idIndex','timestamp','eventType')):raise ProtocolError('Evento inválido')
+        if previous and (e['idIndex']<=previous['idIndex'] or e['timestamp']<previous['timestamp']):raise ProtocolError('Eventos fora de ordem')
+        previous=e
+    return events
+
+def locate_today(camera):
+    first=fetch(camera,0,2)
+    if not first:return 0
+    if len(first)==2:
+        probe=fetch(camera,1,1)
+        if not probe or probe[0]!=first[1]:raise ProtocolError('startIndex não é offset; coleta bloqueada para validar firmware')
+    start=int(datetime.combine(timezone.now().astimezone(ZONE).date(),time.min,tzinfo=ZONE).timestamp())
+    if first[0]['timestamp']>=start:return 0
+    # Discover the end without downloading months of old records.
+    low,high=0,1
+    for _ in range(33):
+        page=fetch(camera,high,1)
+        if not page or page[0]['timestamp']>=start:break
+        low,high=high,high*2
+    else:raise ProtocolError('Não foi possível localizar registros atuais')
+    while low+1<high:
+        mid=(low+high)//2
+        page=fetch(camera,mid,1)
+        if not page or page[0]['timestamp']>=start:high=mid
+        else:low=mid
+    return high
+
+def poll(camera):
+    with transaction.atomic():
+        camera=Camera.objects.select_for_update().get(pk=camera.pk)
+        if NativeWindow.objects.filter(camera=camera).exists() or Reading.objects.filter(camera=camera).exclude(event_id__startswith='pfc-event:').exists():
+            raise ProtocolError('Dispositivo já possui outra fonte de contagem; não combinar push e pull')
+        state,_=PullCursor.objects.get_or_create(camera=camera)
+        if state.initialized and state.last_id is not None and state.offset:
+            anchor=fetch(camera,state.offset-1,1)
+            if not anchor or anchor[0]['idIndex']!=state.last_id:state.initialized=False
+        if not state.initialized:
+            state.offset=locate_today(camera);state.last_id=None;state.initialized=True
+        events=fetch(camera,state.offset,100)
+        now=timezone.now()
+        changed_days=set()
+        if events:
+            raw=RawDelivery.objects.create(camera=camera,payload={'source':'pfc-pull','offset':state.offset,'events':events},status='pull_events')
+            for e in events:
+                stamp=datetime.fromtimestamp(e['timestamp'],utc.utc)
+                if stamp>now+timedelta(minutes=5):raise ProtocolError('Relógio da câmera no futuro; corrija antes de coletar')
+                if e['eventType'] in (0,1):
+                    defaults={'timestamp':stamp,'entries':int(e['eventType']==0),'exits':int(e['eventType']==1),'mode':'delta','counter_epoch':'','raw':raw}
+                    reading,created=Reading.objects.get_or_create(camera=camera,event_id=f"pfc-event:{e['idIndex']}",defaults=defaults)
+                    if not created and (reading.timestamp!=stamp or reading.entries!=defaults['entries'] or reading.exits!=defaults['exits']):raise ProtocolError('idIndex reutilizado com evento diferente; coleta bloqueada')
+                    if created:changed_days.add(stamp.astimezone(ZONE).date())
+                state.last_id=e['idIndex']
+            state.offset+=len(events)
+        state.last_success=now;state.last_error='';state.save()
+        camera.last_seen=now;camera.save(update_fields=['last_seen'])
+        for day in changed_days:
+            if day<now.astimezone(ZONE).date():close_day(day)
+        return len(events)

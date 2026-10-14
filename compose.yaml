@@ -21,6 +21,7 @@ services:
     ports:
       - "8086:8000"
     environment: &env
+      PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}
       SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY}
@@ -30,6 +31,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+  collector:
+    build: .
+    restart: unless-stopped
+    environment:
+      <<: *env
+      PFC_SERVICE_SECRET: ${PFC_SERVICE_SECRET:?Configure PFC_SERVICE_SECRET}
+      PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
+      PFC_POLL_SECONDS: ${PFC_POLL_SECONDS:-5}
+    command: ["python", "manage.py", "poll_pfc"]
+    depends_on:
+      web:
+        condition: service_started
   closer:
     build: .
     restart: unless-stopped

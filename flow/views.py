@@ -1,4 +1,4 @@
-import csv,hashlib,hmac,json
+import csv,hashlib,hmac,json,os
 from datetime import date,timedelta
 from functools import wraps
 from django.http import JsonResponse,HttpResponse
@@ -76,6 +76,7 @@ def ingest(request,heartbeat=False):
         if not c:
             c=Camera.objects.filter(pk=payload.get('device_id',payload.get('camera_id')),enabled=True).first()
         if not c or not c.enabled:raise ValueError('Dispositivo desconhecido')
+        if c.ip in os.environ.get('PFC_PULL_IPS','').split(',') and not heartbeat:return JsonResponse({'error':'Dispositivo configurado para coleta pull'},status=409)
         with transaction.atomic():
             c=Camera.objects.select_for_update().get(pk=c.pk)
             c.last_seen=timezone.now();c.save(update_fields=['last_seen'])

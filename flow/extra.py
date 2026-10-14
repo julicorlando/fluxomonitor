@@ -46,6 +46,7 @@ def detail(request,device_id):
 @login_required
 @user_passes_test(lambda u:u.is_staff)
 def diagnostics(request):
+    from .models import PullCursor
     rows=[]
     for c in Camera.objects.all():
         latest=RawDelivery.objects.filter(camera=c).order_by('-id').first()
@@ -55,7 +56,7 @@ def diagnostics(request):
             if isinstance(v,dict):return {k:('[oculto]' if any(x in k.lower() for x in ('password','token','sign','secret','authorization')) else redact(x)) for k,x in v.items()}
             if isinstance(v,list):return [redact(x) for x in v]
             return v
-        rows.append({'device':c,'latest':latest,'reading':reading,'payload':json.dumps(redact(payload),ensure_ascii=False,indent=2) if latest else 'Nenhum envio recebido','status':'Sem contato' if not latest else ('Formato pendente' if latest.status=='captured' else latest.status)})
+        rows.append({'pull':PullCursor.objects.filter(camera=c).first(),'device':c,'latest':latest,'reading':reading,'payload':json.dumps(redact(payload),ensure_ascii=False,indent=2) if latest else 'Nenhum envio recebido','status':'Sem contato' if not latest else ('Formato pendente' if latest.status=='captured' else latest.status)})
     return render(request,'diagnostics.html',{'rows':rows})
 class UserForm(forms.Form):
     username=forms.CharField(max_length=150,label='Usuário')

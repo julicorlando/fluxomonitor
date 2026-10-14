@@ -110,3 +110,11 @@ class NativeWindow(models.Model):
     reading=models.OneToOneField(Reading,on_delete=models.PROTECT)
     class Meta:
         constraints=[models.UniqueConstraint(fields=['camera','end_time'],name='unique_native_window')]
+
+class PullCursor(models.Model):
+    camera=models.OneToOneField(Camera,on_delete=models.CASCADE)
+    offset=models.BigIntegerField(default=0)
+    last_id=models.BigIntegerField(null=True,blank=True)
+    initialized=models.BooleanField(default=False)
+    last_success=models.DateTimeField(null=True,blank=True)
+    last_error=models.CharField(max_length=250,blank=True)

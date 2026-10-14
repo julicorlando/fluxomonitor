@@ -1,4 +1,4 @@
-import hashlib,json
+import hashlib,json,os
 from datetime import datetime,timezone as dtzone,timedelta
 from django.http import JsonResponse
 from django.db import transaction
@@ -34,6 +34,7 @@ def push(request,heartbeat=False):
         c=Camera.objects.filter(serial=sn,enabled=True).first()
         if not c:return ack(sn,1,'SN não cadastrado',404)
         if request.api_key.camera_id!=c.id:return ack(sn,2,'Use token exclusivo deste dispositivo',403)
+        if c.ip in os.environ.get('PFC_PULL_IPS','').split(',') and not heartbeat:return ack(sn,2,'Dispositivo configurado para coleta pull',409)
         device_time=integer(data,'time')
         if heartbeat:
             with transaction.atomic():

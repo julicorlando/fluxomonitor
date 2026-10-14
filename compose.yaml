@@ -1,4 +1,20 @@
 services:
+  mqtt:
+    build: ./mqtt
+    restart: unless-stopped
+    ports:
+      - "${MQTT_BIND_IP:-10.0.0.147}:1883:1883"
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-fluxo}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Configure MQTT_PASSWORD}
+    volumes:
+      - fluxo_mqtt:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -p 1883 -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\" -t fluxomonitor/health -m ok -q 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
   web:
     build: .
     restart: unless-stopped
@@ -47,5 +63,6 @@ services:
       interval: 5s
       retries: 10
 volumes:
+  fluxo_mqtt:
   fluxo_db:
   fluxo_whatsapp:

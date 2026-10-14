@@ -135,3 +135,15 @@ Token próprio autentica o receptor. A documentação menciona assinatura no pus
 Não combine push e pull sem deduplicação cruzada. O SN é a identidade lógica; banco preserva IDs internos já utilizados. Testar uma câmera com tcpdump, verificar resposta code 0 e comparar janelas com programa de PC antes de ativar as três ou o WhatsApp.
 
 Geração automática por dispositivo: administrador usa botão “Gerar token de recebimento” em /devices/. Serial obrigatório. Sistema gera segredo, vincula exclusivamente ao dispositivo, limita a recebimento e mostra Data/HB Path prontos. Segredo aparece uma vez, somente hash permanece no banco. Regenerar revoga somente tokens anteriores criados por esse botão; demais chaves são preservadas. POST com CSRF obrigatório.
+
+## Broker MQTT no Coolify
+
+Serviço mqtt (Eclipse Mosquitto 2), com volume fluxo_mqtt, reinício automático, autenticação obrigatória, limite de mensagem 1 MiB e healthcheck autenticado. Aceita somente tópicos fluxomonitor/#. Credencial compartilhada inicialmente; ainda não há isolamento por câmera.
+Antes do redeploy, adicione MQTT_USERNAME=fluxo, MQTT_PASSWORD com senha exclusiva e MQTT_BIND_IP=10.0.0.147. O bind exige que esse IP exista no host Docker; altere se migrar o servidor. Não altere POSTGRES_PASSWORD, SECRET_KEY ou WAHA_API_KEY existentes. A senha MQTT é reprocessada em hash a cada inicialização; alterar requer recriar o serviço.
+Câmera: Host 10.0.0.147, Port 1883, usuário/senha acima, Data TOPIC fluxomonitor/235/data, HeartBeat TOPIC fluxomonitor/235/heartbeat. Use 236 e 237 para as demais. Campos Authentication/SSL exigem confirmação do fabricante. Este listener é TCP sem TLS, destinado à rede local; mantenha acesso restrito à rede dos equipamentos. Não usa o domínio HTTP/Cloudflare Tunnel.
+Após deploy, use o terminal do serviço mqtt para observar uma mensagem real (o shell expande variáveis sem precisar colar senha):
+```sh
+mosquitto_sub -h 127.0.0.1 -u "$MQTT_USERNAME" -P "$MQTT_PASSWORD" -t 'fluxomonitor/+/data' -t 'fluxomonitor/+/heartbeat' -v
+```
+O broker recebe e distribui mensagens, mas **ainda não grava contagens no Django**. Falta capturar o payload real e confirmar regras MQTT do fabricante, inclusive eventuais respostas de aplicação, antes de implementar o coletor e deduplicação. O healthcheck publica somente fluxomonitor/health, sem dados de contagem. QoS/armazenamento do broker não garantem recuperação de todas as contagens sem suporte do dispositivo e coletor.
+Referência: https://mosquitto.org/man/mosquitto-conf-5.html

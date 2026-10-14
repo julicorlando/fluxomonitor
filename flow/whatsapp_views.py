@@ -1,17 +1,18 @@
 import re
 from django import forms
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.http import HttpResponse
 from django.shortcuts import render,redirect
 from .models import WhatsAppConfig,WhatsAppDelivery
-from .whatsapp import gateway,start_session,session_info,list_groups
+from .whatsapp import gateway,start_session,session_info,list_groups,send_test
 
 class ConfigForm(forms.ModelForm):
     number=forms.CharField(label='Número com país e DDD, ex.: 5581999999999',required=False)
     group=forms.ChoiceField(label='Ou selecione um grupo',required=False)
     class Meta:
         model=WhatsAppConfig
-        fields=['enabled','metric','send_at']
+        fields=['enabled','send_at']
         labels={'enabled':'Ativar envio diário','metric':'Qual soma enviar','send_at':'Horário (Brasília)'}
         widgets={'send_at':forms.TimeInput(attrs={'type':'time'})}
     def __init__(self,*a,groups=None,**kw):
@@ -23,7 +24,7 @@ class ConfigForm(forms.ModelForm):
         chat=(n+'@c.us') if n else g
         if not chat and self.instance.chat_id:chat=self.instance.chat_id
         if d.get('enabled') and not chat:raise forms.ValidationError('Defina o destinatário antes de ativar.')
-        d['chat_id']=chat;return d
+        d['chat_id']=chat;self.instance.metric='entries';return d
 @login_required
 @user_passes_test(lambda u:u.is_superuser)
 def settings(request):
@@ -39,6 +40,13 @@ def settings(request):
         if request.POST.get('action')=='connect':
             try:start_session();return redirect('/whatsapp/')
             except Exception:error='Não foi possível iniciar a sessão. Verifique os logs do gateway.'
+        elif request.POST.get('action')=='test':
+            try:
+                text=send_test(cfg,request.user.get_username())
+                messages.success(request,'Teste aceito pelo gateway: '+text+' — confira no destinatário.')
+                return redirect('/whatsapp/')
+            except ValueError as exc:error=str(exc)
+            except Exception:error='Não foi possível consultar o gateway. Verifique a conexão do WhatsApp.'
         elif request.POST.get('action')=='logout':
             try:gateway('POST','/api/sessions/default/logout',{});cfg.enabled=False;cfg.save();return redirect('/whatsapp/')
             except Exception:error='Não foi possível desconectar a sessão.'

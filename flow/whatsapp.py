@@ -4,8 +4,8 @@ from urllib.request import Request,urlopen
 from urllib.error import HTTPError
 from django.db import transaction
 from django.utils import timezone
-from .models import WhatsAppConfig,WhatsAppDelivery,Camera,Reading
-from .services import report,ZONE,bounds
+from .models import WhatsAppConfig,WhatsAppDelivery
+from .services import report,ZONE
 
 def gateway(method,path,body=None,binary=False):
     base=os.getenv('WAHA_URL','http://waha:3000').rstrip('/')
@@ -42,22 +42,20 @@ def scheduled_send(now=None):
     scheduled=local.replace(hour=cfg.send_at.hour,minute=cfg.send_at.minute,second=0,microsecond=0)
     # Run once within 10 minutes; never send a stale previous-day report.
     if not scheduled<=local<scheduled+timedelta(minutes=10):return
-    if WhatsAppDelivery.objects.filter(day=local.date()).exists():return
+    if WhatsAppDelivery.objects.filter(day=local.date()).exclude(status="skipped").exists():return
     try:
         if session_info().get('status')!='WORKING':return
     except Exception:return
-    data=report(local.date());included=list(Camera.objects.filter(enabled=True,include_in_total=True))
-    start,_=bounds(local.date())
-    if not included or any(not Reading.objects.filter(camera=c,timestamp__gte=start,timestamp__lte=now).exists() or not c.last_seen or (now-c.last_seen).total_seconds()>max(180,c.expected_interval*3) for c in included):
-        with transaction.atomic():
-            locked=WhatsAppConfig.objects.select_for_update().get(pk=1)
-            WhatsAppDelivery.objects.get_or_create(day=local.date(),defaults={'chat_id':locked.chat_id,'text':'','status':'skipped','detail':'Sem leituras válidas ou contato recente em todos os dispositivos incluídos'})
-        return
-    text=f"Boa noite, fluxo final {data['totals'][cfg.metric]}"
+    data=report(local.date())
+    text=f"Boa noite, fluxo final {data['totals']['entries']}"
     with transaction.atomic():
         locked=WhatsAppConfig.objects.select_for_update().get(pk=1)
+        if not locked.enabled or not locked.chat_id:return
         delivery,created=WhatsAppDelivery.objects.get_or_create(day=local.date(),defaults={'chat_id':locked.chat_id,'text':text,'status':'sending'})
-        if not created:return
+        if not created:
+            if delivery.status!='skipped':return
+            delivery.chat_id=locked.chat_id;delivery.text=text;delivery.status='sending';delivery.detail='';delivery.gateway_id=''
+            delivery.save(update_fields=['chat_id','text','status','detail','gateway_id'])
     try:
         result=gateway('POST','/api/sendText',{'session':'default','chatId':delivery.chat_id,'text':delivery.text})
         ident=result.get('id','')
@@ -67,3 +65,18 @@ def scheduled_send(now=None):
         # A timeout may occur after WhatsApp accepts the message. Never retry blindly.
         delivery.status='unknown';delivery.detail='Resultado incerto; confira no WhatsApp. Sem reenvio automático para evitar duplicidade.'
     delivery.save(update_fields=['status','detail','gateway_id'])
+
+def send_test(cfg,actor):
+    from .models import AuditLog
+    if not cfg.chat_id:raise ValueError('Salve um número ou grupo antes de testar.')
+    if session_info().get('status')!='WORKING':raise ValueError('Conecte o WhatsApp pelo QR antes de testar.')
+    today=timezone.now().astimezone(ZONE).date()
+    text=f"Boa noite, fluxo final {report(today)['totals']['entries']}"
+    audit=AuditLog.objects.create(actor=actor,action='whatsapp_test',object_type='WhatsAppConfig',object_id=str(cfg.pk),changes={'status':'sending','recipient':cfg.chat_id,'text':text})
+    try:
+        gateway('POST','/api/sendText',{'session':'default','chatId':cfg.chat_id,'text':text})
+    except Exception:
+        audit.changes={**audit.changes,'status':'unknown'};audit.save(update_fields=['changes'])
+        raise ValueError('Resultado do teste incerto. Confira no WhatsApp antes de repetir.')
+    audit.changes={**audit.changes,'status':'accepted'};audit.save(update_fields=['changes'])
+    return text

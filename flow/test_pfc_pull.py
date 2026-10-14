@@ -13,7 +13,7 @@ class PullTests(TestCase):
         import hashlib
         self.assertEqual(signature({'startIndex':0,'getQuantity':10},'abc'),hashlib.md5(b'getQuantity10startIndex0abc').hexdigest().upper())
     @patch('flow.pfc_pull.fetch')
-    @patch('flow.pfc_pull.locate_today',return_value=0)
+    @patch('flow.pfc_pull.locate_today',return_value=(0,'offset'))
     def test_entries_exits_unknown_and_replay(self,locate,fetch):
         events=[self.event(1,kind=0),self.event(2,kind=1),self.event(3,kind=4)]
         fetch.return_value=events
@@ -31,14 +31,14 @@ class PullTests(TestCase):
         old=int((timezone.now()-timedelta(days=3)).timestamp())
         events=[dict(idIndex=i,timestamp=old,eventType=0) for i in range(100)] + [self.event(100)]
         fetch.side_effect=lambda c,o,q:events[o:o+q]
-        self.assertEqual(locate_today(self.c),100)
+        self.assertEqual(locate_today(self.c),(100,"offset"))
         self.assertEqual(Reading.objects.count(),0)
     @patch('flow.pfc_pull.fetch')
     def test_incompatible_pagination_blocks(self,fetch):
-        fetch.side_effect=[[self.event(1),self.event(2)],[self.event(50)]]
+        fetch.side_effect=[[self.event(1),self.event(2)],[self.event(50)],[self.event(50)]]
         with self.assertRaises(ProtocolError):locate_today(self.c)
     @patch('flow.pfc_pull.fetch')
-    @patch('flow.pfc_pull.locate_today',return_value=0)
+    @patch('flow.pfc_pull.locate_today',return_value=(0,'offset'))
     def test_future_clock_does_not_advance(self,locate,fetch):
         fetch.return_value=[self.event(1,t=1000)]
         with self.assertRaises(ProtocolError):poll(self.c)
@@ -48,3 +48,15 @@ class PullTests(TestCase):
         raw=RawDelivery.objects.create(camera=self.c,payload={})
         Reading.objects.create(camera=self.c,event_id='push:1',timestamp=timezone.now(),entries=1,exits=0,mode='delta',raw=raw)
         with self.assertRaises(ProtocolError):poll(self.c)
+
+    @patch('flow.pfc_pull.fetch')
+    def test_absolute_ids_and_gaps(self,fetch):
+        events=[self.event(4739864),self.event(4739868)]
+        fetch.side_effect=lambda c,o,q:[e for e in events if e['idIndex']>=o][:q]
+        self.assertEqual(locate_today(self.c),(4739864,'id'))
+        self.assertEqual(poll(self.c),2)
+        state=PullCursor.objects.get(camera=self.c)
+        self.assertEqual(state.index_mode,'id')
+        self.assertEqual(state.offset,4739869)
+        self.assertEqual(poll(self.c),0)
+        self.assertEqual(Reading.objects.count(),2)

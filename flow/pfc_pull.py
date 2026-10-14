@@ -37,25 +37,34 @@ def fetch(camera,offset,quantity=100):
 
 def locate_today(camera):
     first=fetch(camera,0,2)
-    if not first:return 0
+    if not first:return 0,'id'
+    mode='id'
     if len(first)==2:
         probe=fetch(camera,1,1)
-        if not probe or probe[0]!=first[1]:raise ProtocolError('startIndex não é offset; coleta bloqueada para validar firmware')
+        if probe and probe[0]==first[1]:mode='offset'
+        else:
+            probe=fetch(camera,first[0]['idIndex']+1,1)
+            if not probe or probe[0]!=first[1]:raise ProtocolError('Paginação desconhecida: startIndex não corresponde ao offset nem ao idIndex')
+    else:
+        probe=fetch(camera,first[0]['idIndex'],1)
+        if not probe or probe[0]!=first[0]:raise ProtocolError('Não foi possível validar paginação por idIndex')
     start=int(datetime.combine(timezone.now().astimezone(ZONE).date(),time.min,tzinfo=ZONE).timestamp())
-    if first[0]['timestamp']>=start:return 0
-    # Discover the end without downloading months of old records.
-    low,high=0,1
+    base=first[0]['idIndex'] if mode=='id' else 0
+    if first[0]['timestamp']>=start:return base,mode
+    low,high=base,base+1
     for _ in range(33):
         page=fetch(camera,high,1)
+        if page and mode=='id' and page[0]['idIndex']<high:raise ProtocolError('Firmware retornou evento anterior ao startIndex solicitado')
         if not page or page[0]['timestamp']>=start:break
-        low,high=high,high*2
+        low,high=high,base+2*(high-base)
     else:raise ProtocolError('Não foi possível localizar registros atuais')
     while low+1<high:
         mid=(low+high)//2
         page=fetch(camera,mid,1)
+        if page and mode=='id' and page[0]['idIndex']<mid:raise ProtocolError('Firmware retornou evento anterior ao startIndex solicitado')
         if not page or page[0]['timestamp']>=start:high=mid
         else:low=mid
-    return high
+    return high,mode
 
 def poll(camera):
     with transaction.atomic():
@@ -64,11 +73,12 @@ def poll(camera):
             raise ProtocolError('Dispositivo já possui outra fonte de contagem; não combinar push e pull')
         state,_=PullCursor.objects.get_or_create(camera=camera)
         if state.initialized and state.last_id is not None and state.offset:
-            anchor=fetch(camera,state.offset-1,1)
+            anchor=fetch(camera,state.last_id if state.index_mode=='id' else state.offset-1,1)
             if not anchor or anchor[0]['idIndex']!=state.last_id:state.initialized=False
         if not state.initialized:
-            state.offset=locate_today(camera);state.last_id=None;state.initialized=True
+            state.offset,state.index_mode=locate_today(camera);state.last_id=None;state.initialized=True
         events=fetch(camera,state.offset,100)
+        if events and state.index_mode=="id" and events[0]["idIndex"]<state.offset:raise ProtocolError("Evento anterior ao cursor; avanço bloqueado")
         now=timezone.now()
         changed_days=set()
         if events:
@@ -82,7 +92,7 @@ def poll(camera):
                     if not created and (reading.timestamp!=stamp or reading.entries!=defaults['entries'] or reading.exits!=defaults['exits']):raise ProtocolError('idIndex reutilizado com evento diferente; coleta bloqueada')
                     if created:changed_days.add(stamp.astimezone(ZONE).date())
                 state.last_id=e['idIndex']
-            state.offset+=len(events)
+            state.offset=state.last_id+1 if state.index_mode=='id' else state.offset+len(events)
         state.last_success=now;state.last_error='';state.save()
         camera.last_seen=now;camera.save(update_fields=['last_seen'])
         for day in changed_days:

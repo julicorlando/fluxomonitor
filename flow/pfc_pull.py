@@ -8,7 +8,11 @@ from .models import Camera,PullCursor,RawDelivery,Reading,NativeWindow
 from .services import ZONE,close_day
 
 PATH='passengerFlow/passengerFlowData/PassengerFlowDataGet'
-class ProtocolError(ValueError):pass
+class ProtocolError(ValueError):
+    def __init__(self,message,payload=None):
+        super().__init__(message)
+        self.payload=payload
+
 
 def signature(params,secret):
     if not secret:raise ProtocolError('PFC_SERVICE_SECRET obrigatório')
@@ -22,16 +26,19 @@ def fetch(camera,offset,quantity=100):
         body=response.read(1048577)
     if len(body)>1048576:raise ProtocolError('Resposta acima de 1 MiB')
     data=json.loads(body)
+    diagnostic={'source':'pfc-pull','request':params,'response':data}
+    if not isinstance(data,dict):raise ProtocolError('Resposta JSON não é objeto',diagnostic)
     result=data.get('result',{})
+    if not isinstance(result,dict):raise ProtocolError('result inválido',diagnostic)
     if str(result.get('isError')).lower()!='false' or str(result.get('code'))!='0':
-        raise ProtocolError('Equipamento recusou consulta: '+str(result.get('message','resposta inválida'))[:150])
+        raise ProtocolError('Equipamento recusou consulta: '+str(result.get('message','resposta inválida'))[:150],diagnostic)
     events=data.get('PassengerFlowData')
-    if not isinstance(events,list) or len(events)>quantity:raise ProtocolError('PassengerFlowData inválido')
-    if data.get('rptQuantity')!=len(events):raise ProtocolError('rptQuantity divergente')
+    if not isinstance(events,list) or len(events)>quantity:raise ProtocolError('PassengerFlowData inválido',diagnostic)
+    if data.get('rptQuantity')!=len(events):raise ProtocolError('rptQuantity divergente',diagnostic)
     previous=None
     for e in events:
-        if not isinstance(e,dict) or any(type(e.get(k)) is not int or e[k]<0 for k in ('idIndex','timestamp','eventType')):raise ProtocolError('Evento inválido')
-        if previous and (e['idIndex']<=previous['idIndex'] or e['timestamp']<previous['timestamp']):raise ProtocolError('Eventos fora de ordem')
+        if not isinstance(e,dict) or any(type(e.get(k)) is not int or e[k]<0 for k in ('idIndex','timestamp','eventType')):raise ProtocolError('Evento inválido',diagnostic)
+        if previous and (e['idIndex']<=previous['idIndex'] or e['timestamp']<previous['timestamp']):raise ProtocolError('Eventos fora de ordem',diagnostic)
         previous=e
     return events
 

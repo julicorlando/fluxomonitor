@@ -60,3 +60,16 @@ class PullTests(TestCase):
         self.assertEqual(state.offset,4739869)
         self.assertEqual(poll(self.c),0)
         self.assertEqual(Reading.objects.count(),2)
+
+    @patch.dict(os.environ,{'PFC_PULL_IPS':'192.168.1.235','PFC_SERVICE_SECRET':'test'})
+    @patch('flow.pfc_pull.urlopen')
+    def test_rejected_response_preserved_after_rollback(self,open_url):
+        import json
+        from django.core.management import call_command
+        payload={'result':{'isError':'false','code':'0'},'rptQuantity':0}
+        open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+        call_command('poll_pfc',once=True)
+        self.assertEqual(RawDelivery.objects.get().payload['response'],payload)
+        self.assertEqual(RawDelivery.objects.get().payload['request']['getQuantity'],2)
+        self.assertFalse(Reading.objects.exists())
+        self.assertFalse(PullCursor.objects.get(camera=self.c).initialized)

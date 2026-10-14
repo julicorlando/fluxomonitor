@@ -165,3 +165,5 @@ Painel Diagnóstico mostra última consulta e erro; logs collector mostram IP e 
 50 testes Django passam localmente, incluindo coletor simulado. Não há teste de rede real neste ambiente nem acesso ao servidor privado. É necessária confirmação de paginação na primeira execução em hardware.
 
 Atualização de paginação: após diagnóstico real indicar que startIndex não é offset, o coletor também testa startIndex=primeiro idIndex+1 e compara o evento seguinte. Se confirmado, usa cursor absoluto último idIndex+1 (inclusive com gaps), verifica âncora pelo próprio ID e localiza hoje por IDs. Modo é persistido na migração 0008. Não converte cursores anteriores de offset silenciosamente. Se nenhum modo for comprovado, mantém bloqueio com mensagem de paginação desconhecida. 51 testes passam; confirmação final do modo absoluto depende da primeira consulta real após redeploy.
+
+Respostas de API recusadas por formato são agora preservadas em Diagnóstico com request.startIndex/getQuantity e response original, após rollback da importação. Erros idênticos consecutivos não geram novos registros. Nenhuma assinatura/chave é incluída. 52 testes passam.

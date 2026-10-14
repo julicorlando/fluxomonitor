@@ -1,7 +1,7 @@
 import os,time,logging
 from django.core.management.base import BaseCommand,CommandError
 from django.db import close_old_connections
-from flow.models import Camera,PullCursor
+from flow.models import Camera,PullCursor,RawDelivery
 from flow.pfc_pull import poll
 
 class Command(BaseCommand):
@@ -27,6 +27,11 @@ class Command(BaseCommand):
                     # Do not log URLs, signatures or credentials.
                     message=str(error)[:250] if isinstance(error,ValueError) else type(error).__name__
                     PullCursor.objects.update_or_create(camera=camera,defaults={'last_error':message})
+                    payload=getattr(error,'payload',None)
+                    if payload is not None:
+                        previous=RawDelivery.objects.filter(camera=camera).order_by('-id').first()
+                        if not previous or previous.payload!=payload or previous.status!='pull_format_error':
+                            RawDelivery.objects.create(camera=camera,payload=payload,status='pull_format_error')
                     logging.error('%s: %s',camera.ip,message)
             if options['once']:return
             time.sleep(max(0,interval-(time.monotonic()-started)))

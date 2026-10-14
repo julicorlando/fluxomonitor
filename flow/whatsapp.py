@@ -54,9 +54,9 @@ def daily_times(cfg,day):
 
 def flow_message(local,entries):
     clock=local.time().replace(tzinfo=None)
-    if clock>=final_time(local.date()):return f"fluxo final {entries}"
+    if clock>=final_time(local.date()):return f"*MENSAGEM AUTOMATICA*\n\nfluxo final {entries}"
     greeting='Bom dia' if time(6)<=clock<time(12) else ('Boa tarde' if time(12)<=clock<time(18) else 'Boa noite')
-    return f"{greeting} fluxo parcial {entries}"
+    return f"*MENSAGEM AUTOMATICA*\n\n{greeting} fluxo parcial {entries}"
 
 def scheduled_send(now=None):
     now=now or timezone.now();local=now.astimezone(ZONE)

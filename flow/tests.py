@@ -48,7 +48,7 @@ class FlowTests(TestCase):
  def test_login_dashboard(self):
   from django.contrib.auth.models import User
   u=User.objects.create_user('tester',password='Strong-example-123');self.client.force_login(u)
-  self.assertContains(self.client.get('/'),'Movimento em perspectiva')
+  self.assertContains(self.client.get('/'),'GesTi')
  def test_invalid(self):self.assertEqual(self.send('a',-1,0).status_code,400)
  def test_device_create_and_edit(self):
   from django.contrib.auth.models import User
@@ -166,7 +166,7 @@ class FlowTests(TestCase):
   with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
    scheduled_send(now);scheduled_send(now)
    self.assertEqual(send.call_count,1)
-   self.assertEqual(send.call_args.args[2]['text'],'fluxo final 40')
+   self.assertEqual(send.call_args.args[2]['text'],'*MENSAGEM AUTOMATICA*\n\nfluxo final 40')
   self.assertEqual(WhatsAppDelivery.objects.get().status,'accepted')
  def test_whatsapp_unknown_no_retry(self):
   from unittest.mock import patch
@@ -182,7 +182,7 @@ class FlowTests(TestCase):
   from .models import WhatsAppDelivery
   now=self.prepare_whatsapp();Reading.objects.all().delete()
   with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
-   scheduled_send(now);self.assertEqual(send.call_args.args[2]['text'],'fluxo final 0')
+   scheduled_send(now);self.assertEqual(send.call_args.args[2]['text'],'*MENSAGEM AUTOMATICA*\n\nfluxo final 0')
   self.assertEqual(WhatsAppDelivery.objects.get().status,'accepted')
  def test_whatsapp_entries_offline_devices_and_skipped_retry(self):
   from unittest.mock import patch
@@ -195,7 +195,7 @@ class FlowTests(TestCase):
   with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
    scheduled_send(now);scheduled_send(now)
    self.assertEqual(send.call_count,1)
-   self.assertEqual(send.call_args.args[2]['text'],'fluxo final 40')
+   self.assertEqual(send.call_args.args[2]['text'],'*MENSAGEM AUTOMATICA*\n\nfluxo final 40')
   self.assertEqual(WhatsAppDelivery.objects.get().status,'accepted')
  def test_whatsapp_time_and_offline(self):
   from unittest.mock import patch
@@ -222,7 +222,7 @@ class FlowTests(TestCase):
    response=self.client.post('/whatsapp/',{'action':'test'})
    self.assertEqual(response.status_code,302)
    self.assertEqual(send.call_count,1)
-   self.assertTrue(send.call_args.args[2]['text'].startswith(('Bom dia fluxo parcial ','Boa tarde fluxo parcial ','Boa noite fluxo parcial ','fluxo final ')))
+   self.assertTrue(send.call_args.args[2]['text'].startswith('*MENSAGEM AUTOMATICA*\n\n'))
   self.assertFalse(WhatsAppDelivery.objects.exists())
   self.assertEqual(AuditLog.objects.filter(action='whatsapp_test').get().changes['status'],'accepted')
  def test_whatsapp_multiple_times_once_each(self):
@@ -251,11 +251,11 @@ class FlowTests(TestCase):
   from .models import WhatsAppConfig,CalendarException
   local=datetime(2026,10,14,6,0,tzinfo=ZoneInfo('America/Sao_Paulo'))
   for hour,minute,prefix in [(6,0,'Bom dia fluxo parcial'),(11,59,'Bom dia fluxo parcial'),(12,0,'Boa tarde fluxo parcial'),(18,0,'Boa noite fluxo parcial'),(21,0,'Boa noite fluxo parcial'),(22,10,'fluxo final')]:
-   self.assertEqual(flow_message(local.replace(hour=hour,minute=minute),100),prefix+' 100')
+   self.assertEqual(flow_message(local.replace(hour=hour,minute=minute),100),'*MENSAGEM AUTOMATICA*\n\n'+prefix+' 100')
   sunday=local+timedelta(days=4)
-  self.assertEqual(flow_message(sunday.replace(hour=21),100),'fluxo final 100')
+  self.assertEqual(flow_message(sunday.replace(hour=21),100),'*MENSAGEM AUTOMATICA*\n\nfluxo final 100')
   CalendarException.objects.create(day=local.date(),description='Feriado',closed=False,is_holiday=True)
-  self.assertEqual(flow_message(local.replace(hour=21),100),'fluxo final 100')
+  self.assertEqual(flow_message(local.replace(hour=21),100),'*MENSAGEM AUTOMATICA*\n\nfluxo final 100')
   cfg=WhatsAppConfig(send_times=['12:00','18:00','22:10'])
   self.assertEqual(daily_times(cfg,local.date()),['12:00','18:00','21:00'])
  def test_whatsapp_multiple_recipients_independent(self):

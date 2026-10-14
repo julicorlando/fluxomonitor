@@ -202,3 +202,43 @@ class FlowTests(TestCase):
   from .whatsapp_views import ConfigForm
   form=ConfigForm({'enabled':'on','number':'+55 (81) 99999-9999','metric':'entries','send_at':'22:10'})
   self.assertTrue(form.is_valid(),form.errors);self.assertEqual(form.cleaned_data['chat_id'],'5581999999999@c.us')
+ def native_payload(self):
+  self.c.serial='201000002212160408';self.c.save()
+  ts=int(timezone.now().timestamp())-120
+  payload={k:0 for k in ('in','out','passby','turnback','avgStayTime','inAdult','outAdult','passbyAdult','turnbackAdult','inChild','outChild','passbyChild','turnbackChild','total')}
+  payload.update(sn=self.c.serial,startTime=ts-60,endTime=ts,time=ts,**{'in':10,'out':3,'total':13})
+  return payload
+ def native_post(self,p):return self.client.post('/api/camera/dataUpload/test',json.dumps(p),content_type='application/json')
+ def test_native_upsert(self):
+  p=self.native_payload();r=self.native_post(p);self.assertEqual(r.json()['code'],0)
+  self.native_post(p);self.assertEqual(Reading.objects.count(),1)
+  p['time']+=1;p['in']=12;self.native_post(p)
+  self.assertEqual(Reading.objects.count(),1);self.assertEqual(Reading.objects.get().entries,12)
+  day=datetime.fromtimestamp(p['endTime'],ZoneInfo('America/Sao_Paulo')).date()
+  self.assertEqual(report(day)['totals']['entries'],12)
+ def test_native_stale(self):
+  p=self.native_payload();self.native_post(p);p['time']-=1;p['in']=100
+  self.assertEqual(self.native_post(p).json()['code'],0)
+  self.assertEqual(Reading.objects.get().entries,10)
+ def test_native_heartbeat_clock(self):
+  p=self.native_payload()
+  r=self.client.post('/api/camera/heartBeat/test',json.dumps({'sn':p['sn'],'time':p['time']}),content_type='application/json')
+  self.assertEqual(r.json()['code'],0);self.assertAlmostEqual(r.json()['data']['time'],int(timezone.now().timestamp()),delta=2)
+  self.assertEqual(Reading.objects.count(),0)
+ def test_native_unknown_serial(self):
+  p=self.native_payload();p['sn']='unknown'
+  self.assertEqual(self.native_post(p).json()['code'],1);self.assertEqual(Reading.objects.count(),0)
+ def test_native_overlap_reject(self):
+  p=self.native_payload();self.native_post(p)
+  p['endTime']+=30;p['time']+=30
+  self.assertEqual(self.native_post(p).status_code,400);self.assertEqual(Reading.objects.count(),1)
+ def test_native_signature_reference(self):
+  from .native import sign_parameters
+  self.assertEqual(sign_parameters({'startIndex':0,'getQuantity':100},'test-secret'),hashlib.md5(b'getQuantity=100&startIndex=0&test-secret').hexdigest().upper())
+  self.assertEqual(sign_parameters({},'test-secret'),hashlib.md5(b'test-secret').hexdigest().upper())
+ def test_native_malformed(self):
+  p=self.native_payload();p['in']=-1
+  self.assertEqual(self.native_post(p).status_code,400);self.assertEqual(Reading.objects.count(),0)
+ def test_native_scoped(self):
+  p=self.native_payload();other=Camera.objects.create(name='Outro',ip='192.168.1.236',serial='another')
+  p['sn']=other.serial;self.assertEqual(self.native_post(p).status_code,403)

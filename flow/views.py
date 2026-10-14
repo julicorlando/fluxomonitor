@@ -18,7 +18,7 @@ def access(scope):
         def inner(request,*a,**kw):
             request.api_key=None
             if scope=='read' and request.user.is_authenticated:return fn(request,*a,**kw)
-            token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
+            token=kw.pop('device_token',None) or request.headers.get('Authorization','').removeprefix('Bearer ').strip()
             key=ApiKey.objects.filter(digest=hashlib.sha256(token.encode()).hexdigest(),enabled=True).first() if token else None
             if not key or not getattr(key,'can_'+scope):return JsonResponse({'error':'Token inválido ou sem permissão'},status=401)
             request.api_key=key;return fn(request,*a,**kw)
@@ -121,7 +121,9 @@ def device_api(request,device_id):
     except ValueError:return JsonResponse({'error':'Use date=AAAA-MM-DD'},status=400)
     latest=Reading.objects.filter(camera=c).order_by('-timestamp','-id').first()
     data=report(day,c.id)
-    return JsonResponse({'device':{'id':c.id,'name':c.name,'ip':c.ip,'serial':c.serial,'location':c.location,'manufacturer':c.manufacturer,'model':c.model,'enabled':c.enabled,'last_seen':c.last_seen},'latest_counter':{'timestamp':latest.timestamp,'entries':latest.entries,'exits':latest.exits,'mode':latest.mode,'counter_epoch':latest.counter_epoch} if latest else None,'day':data})
+    from .models import NativeWindow
+    native=NativeWindow.objects.filter(camera=c).order_by('-end_time').first()
+    return JsonResponse({'native_counter':native.payload if native else None,'device':{'id':c.id,'name':c.name,'ip':c.ip,'serial':c.serial,'location':c.location,'manufacturer':c.manufacturer,'model':c.model,'enabled':c.enabled,'last_seen':c.last_seen},'latest_counter':{'timestamp':latest.timestamp,'entries':latest.entries,'exits':latest.exits,'mode':latest.mode,'counter_epoch':latest.counter_epoch} if latest else None,'day':data})
 @access('read')
 def device_readings(request,device_id):
     if request.api_key and request.api_key.camera_id and request.api_key.camera_id!=device_id:return JsonResponse({'error':'Sem permissão para este dispositivo'},status=403)

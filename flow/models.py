@@ -100,3 +100,13 @@ class WhatsAppDelivery(models.Model):
     detail=models.CharField(max_length=250,blank=True)
     gateway_id=models.CharField(max_length=150,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
+
+class NativeWindow(models.Model):
+    camera=models.ForeignKey(Camera,on_delete=models.PROTECT)
+    start_time=models.BigIntegerField()
+    end_time=models.BigIntegerField()
+    version_time=models.BigIntegerField()
+    payload=models.JSONField()
+    reading=models.OneToOneField(Reading,on_delete=models.PROTECT)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['camera','end_time'],name='unique_native_window')]

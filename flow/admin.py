@@ -27,3 +27,11 @@ class AuditAdmin(admin.ModelAdmin):
     def has_add_permission(self,r):return False
     def has_change_permission(self,r,obj=None):return False
     def has_delete_permission(self,r,obj=None):return False
+
+from .models import NativeWindow
+@admin.register(NativeWindow)
+class NativeWindowAdmin(admin.ModelAdmin):
+    list_display=('camera','start_time','end_time','version_time')
+    def has_add_permission(self,r):return False
+    def has_change_permission(self,r,obj=None):return False
+    def has_delete_permission(self,r,obj=None):return False

@@ -110,19 +110,23 @@ class ScheduledSummary(models.Model):
         constraints=[models.UniqueConstraint(fields=['kind','start','end'],name='unique_summary_period')]
 
 class WhatsAppConfig(models.Model):
+    send_times=models.JSONField(default=list,blank=True)
     enabled=models.BooleanField(default=False)
     chat_id=models.CharField(max_length=100,blank=True)
     recipient_label=models.CharField(max_length=150,blank=True)
     metric=models.CharField(max_length=20,default='entries',choices=[('entries','Entradas'),('passages','Entradas + saídas')])
     send_at=models.TimeField(default='22:10')
 class WhatsAppDelivery(models.Model):
-    day=models.DateField(unique=True)
+    scheduled_time=models.TimeField(default='22:10')
+    day=models.DateField()
     chat_id=models.CharField(max_length=100)
     text=models.TextField()
     status=models.CharField(max_length=30)
     detail=models.CharField(max_length=250,blank=True)
     gateway_id=models.CharField(max_length=150,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['day','scheduled_time'],name='unique_whatsapp_day_time')]
 
 class NativeWindow(models.Model):
     camera=models.ForeignKey(Camera,on_delete=models.PROTECT)

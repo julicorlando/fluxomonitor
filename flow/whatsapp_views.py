@@ -1,4 +1,5 @@
 import re
+from datetime import time
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required,user_passes_test
@@ -8,15 +9,20 @@ from .models import WhatsAppConfig,WhatsAppDelivery
 from .whatsapp import gateway,start_session,session_info,list_groups,send_test
 
 class ConfigForm(forms.ModelForm):
+    send_count=forms.IntegerField(label='Quantidade de envios por dia',min_value=1,max_value=24)
+    times=forms.CharField(label='Horários dos envios (Brasília)',widget=forms.Textarea(attrs={'rows':3}),help_text='Um horário HH:MM por linha ou separado por vírgula. Ex.: 12:00, 18:00, 22:10.')
     number=forms.CharField(label='Número com país e DDD, ex.: 5581999999999',required=False)
     group=forms.ChoiceField(label='Ou selecione um grupo',required=False)
     class Meta:
         model=WhatsAppConfig
-        fields=['enabled','send_at']
+        fields=['enabled']
         labels={'enabled':'Ativar envio diário','metric':'Qual soma enviar','send_at':'Horário (Brasília)'}
         widgets={'send_at':forms.TimeInput(attrs={'type':'time'})}
     def __init__(self,*a,groups=None,**kw):
         super().__init__(*a,**kw);self.fields['group'].choices=[('','Nenhum')]+(groups or [])
+        times=self.instance.send_times or [str(self.instance.send_at)[:5]]
+        self.fields['send_count'].initial=len(times)
+        self.fields['times'].initial=', '.join(times)
     def clean(self):
         d=super().clean();n=re.sub(r'[ +()\-]','',d.get('number',''));g=d.get('group')
         if n and g:raise forms.ValidationError('Escolha número ou grupo, não ambos.')
@@ -24,6 +30,14 @@ class ConfigForm(forms.ModelForm):
         chat=(n+'@c.us') if n else g
         if not chat and self.instance.chat_id:chat=self.instance.chat_id
         if d.get('enabled') and not chat:raise forms.ValidationError('Defina o destinatário antes de ativar.')
+        values=[v.strip() for v in re.split(r'[,;\n]',d.get('times','')) if v.strip()]
+        if any(not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]',v) for v in values):self.add_error('times','Use horários de 00:00 a 23:59 no formato HH:MM.')
+        elif len(set(values))!=len(values):self.add_error('times','Os horários devem ser diferentes.')
+        elif len(values)!=d.get('send_count'):self.add_error('times','Informe um horário para cada envio configurado.')
+        elif not 1<=len(values)<=24:self.add_error('times','Configure de 1 a 24 horários.')
+        else:
+            self.instance.send_times=sorted(values)
+            self.instance.send_at=time.fromisoformat(self.instance.send_times[0])
         d['chat_id']=chat;self.instance.metric='entries';return d
 @login_required
 @user_passes_test(lambda u:u.is_superuser)

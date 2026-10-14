@@ -225,9 +225,30 @@ class FlowTests(TestCase):
    self.assertTrue(send.call_args.args[2]['text'].startswith('Boa noite, fluxo final '))
   self.assertFalse(WhatsAppDelivery.objects.exists())
   self.assertEqual(AuditLog.objects.filter(action='whatsapp_test').get().changes['status'],'accepted')
+ def test_whatsapp_multiple_times_once_each(self):
+  from unittest.mock import patch
+  from .whatsapp import scheduled_send
+  from .models import WhatsAppDelivery,WhatsAppConfig
+  now=self.prepare_whatsapp()
+  WhatsAppConfig.objects.filter(pk=1).update(send_times=['22:10','22:12','23:00'])
+  with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
+   scheduled_send(now+timedelta(minutes=3));scheduled_send(now+timedelta(minutes=4))
+   self.assertEqual(send.call_count,2)
+   scheduled_send(now+timedelta(minutes=50))
+   self.assertEqual(send.call_count,3)
+  self.assertEqual(WhatsAppDelivery.objects.count(),3)
+ def test_whatsapp_schedule_validation(self):
+  from .whatsapp_views import ConfigForm
+  base={'enabled':'on','number':'5581999999999','send_count':2}
+  for times in ('12:00','12:00,12:00','25:00,22:10'):
+   form=ConfigForm({**base,'times':times})
+   self.assertFalse(form.is_valid())
+  form=ConfigForm({**base,'times':'22:10, 12:00'})
+  self.assertTrue(form.is_valid(),form.errors)
+  self.assertEqual(form.save(commit=False).send_times,['12:00','22:10'])
  def test_whatsapp_form(self):
   from .whatsapp_views import ConfigForm
-  form=ConfigForm({'enabled':'on','number':'+55 (81) 99999-9999','metric':'entries','send_at':'22:10'})
+  form=ConfigForm({'enabled':'on','number':'+55 (81) 99999-9999','send_count':1,'times':'22:10'})
   self.assertTrue(form.is_valid(),form.errors);self.assertEqual(form.cleaned_data['chat_id'],'5581999999999@c.us')
  def native_payload(self):
   self.c.serial='201000002212160408';self.c.save()

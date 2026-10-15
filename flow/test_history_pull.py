@@ -142,3 +142,22 @@ class HistoryLimitTests(TestCase):
         self.assertEqual(find_end(None,100),111)
         fetch.side_effect=lambda camera,index,quantity:[{}] if index<3 else []
         self.assertEqual(find_end(None,0),3)
+
+class HistoryPriorityTests(TestCase):
+    @patch.dict(os.environ,{'PFC_PULL_IPS':'192.168.1.235'})
+    @patch('flow.management.commands.import_pfc_history.import_batch')
+    def test_today_runs_before_older_jobs(self,run):
+        from django.core.management import call_command
+        camera=Camera.objects.create(ip='192.168.1.235',name='A')
+        day=timezone.now().astimezone(ZONE).date()
+        HistoryImport.objects.create(camera=camera,start=day-timedelta(days=10),end=day-timedelta(days=1))
+        today=HistoryImport.objects.create(camera=camera,start=day,end=day)
+        call_command('import_pfc_history',once=True)
+        run.assert_called_once_with(today.pk)
+    @patch('flow.import_cleanup.reimport_today',side_effect=ValueError('Bloqueio de fonte'))
+    def test_expected_guard_is_visible_instead_of_500(self,reset):
+        user=User.objects.create_user('guard-admin',is_superuser=True,is_staff=True)
+        self.client.force_login(user)
+        response=self.client.post('/imports/',{'action':'reimport_today'},follow=True)
+        self.assertContains(response,'Bloqueio de fonte')
+        self.assertFalse(HistoryImport.objects.exists())

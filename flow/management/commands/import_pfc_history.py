@@ -1,6 +1,9 @@
 import logging,time,os
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections
+from django.db.models import Case,When,Value,IntegerField
+from django.utils import timezone
+from flow.services import ZONE
 from flow.models import HistoryImport,RawDelivery
 from flow.history_pull import import_batch
 
@@ -13,7 +16,8 @@ class Command(BaseCommand):
             close_old_connections()
             job=None
             try:
-                job=HistoryImport.objects.filter(status__in=['pending','running'],camera__ip__in=ips).order_by('id').first()
+                today=timezone.now().astimezone(ZONE).date()
+                job=HistoryImport.objects.filter(status__in=['pending','running'],camera__ip__in=ips).annotate(priority=Case(When(start__lte=today,end__gte=today,then=Value(0)),default=Value(1),output_field=IntegerField())).order_by('priority','id').first()
                 if job:import_batch(job.pk)
             except Exception as error:
                 close_old_connections()

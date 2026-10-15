@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from django import forms
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.shortcuts import render,redirect
 from django.http import JsonResponse
@@ -40,9 +41,16 @@ def imports(request):
                 from django.http import HttpResponseForbidden
                 return HttpResponseForbidden()
             from .import_cleanup import cleanup,restore,reimport_today
-            if request.POST['action']=='reimport_today':reimport_today(request.user.get_username())
-            elif request.POST['action']=='cleanup':cleanup(request.user.get_username())
-            else:restore(int(request.POST.get('archive_id','0')),request.user.get_username())
+            try:
+                if request.POST['action']=='reimport_today':reimport_today(request.user.get_username())
+                elif request.POST['action']=='cleanup':cleanup(request.user.get_username())
+                else:restore(int(request.POST.get('archive_id','0')),request.user.get_username())
+                messages.success(request,'Operação concluída com cópia recuperável.')
+            except ValueError as exc:messages.error(request,str(exc))
+            except Exception as exc:
+                import logging
+                logging.error('Ação de importação bloqueada: %s',type(exc).__name__)
+                messages.error(request,'Operação não concluída: '+type(exc).__name__+'. A transação não foi aplicada.')
             return redirect('/imports/')
         if request.POST.get('action')=='retry':
             with transaction.atomic():

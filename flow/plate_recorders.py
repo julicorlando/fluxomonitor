@@ -1,4 +1,4 @@
-"""NVD 3116 channel profiles. RTSP credentials stay on the local collector."""
+"""NVD 3116 channels and encrypted credentials for the integrated worker."""
 import hashlib
 import secrets
 from django import forms
@@ -8,14 +8,24 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.debug import sensitive_post_parameters
+from .plate_credentials import encrypt_password
 from .plate_status import recorder_status, camera_status
 from .models import PlateRecorder, PlateCamera, AuditLog
 
 class RecorderForm(forms.ModelForm):
+    password=forms.CharField(label='Senha do NVR',required=False,max_length=256,strip=False,widget=forms.PasswordInput(attrs={'autocomplete':'new-password'}),help_text='Deixe em branco ao editar para manter a senha salva.')
+
     class Meta:
         model = PlateRecorder
-        fields = ['name','host','port','enabled']
-        labels = {'name':'Nome do NVR','host':'IP do NVR','port':'Porta RTSP','enabled':'NVR ativo'}
+        fields = ['name','host','port','username','password','integrated_enabled','enabled']
+        labels = {'name':'Nome do NVR','host':'IP do NVR','port':'Porta RTSP','enabled':'NVR ativo','username':'Usuário do NVR','integrated_enabled':'Coletor integrado ativo'}
+    def clean(self):
+        d=super().clean()
+        if d.get('integrated_enabled') and (d.get('username') or d.get('password') or self.instance.password_encrypted):
+            if not d.get('username') or not (d.get('password') or self.instance.password_encrypted):
+                raise forms.ValidationError('Informe usuário e senha do NVR para ativar o coletor integrado.')
+        return d
     def clean_port(self):
         port=self.cleaned_data['port']
         if not 1<=port<=65535: raise forms.ValidationError('Porta entre 1 e 65535.')
@@ -38,6 +48,7 @@ class ChannelForm(forms.Form):
 @login_required
 @user_passes_test(lambda u:u.is_superuser)
 @require_http_methods(['GET','POST'])
+@sensitive_post_parameters('password')
 def recorders(request,pk=None):
     obj=get_object_or_404(PlateRecorder,pk=pk) if pk else None
     token=None
@@ -53,11 +64,12 @@ def recorders(request,pk=None):
     if request.method=='POST' and form.is_valid():
         with transaction.atomic():
             recorder=form.save(commit=False)
+            if form.cleaned_data.get('password'): recorder.password_encrypted=encrypt_password(form.cleaned_data['password'])
             if obj is None:
                 token=secrets.token_urlsafe(32)
                 recorder.token_digest=hashlib.sha256(token.encode()).hexdigest()
             recorder.save()
-            AuditLog.objects.create(actor=request.user.username,action='update' if obj else 'create',object_type='PlateRecorder',object_id=str(recorder.pk),changes={'enabled':recorder.enabled,'host':recorder.host,'port':recorder.port})
+            AuditLog.objects.create(actor=request.user.username,action='update' if obj else 'create',object_type='PlateRecorder',object_id=str(recorder.pk),changes={'enabled':recorder.enabled,'host':recorder.host,'port':recorder.port,'credentials_updated':bool(form.cleaned_data.get('password')),'integrated_enabled':recorder.integrated_enabled})
         if obj: return redirect('/plates/nvrs/')
         form=RecorderForm()
     response=render(request,'plate_recorders.html',{'form':form,'editing':obj,'recorders':with_status(),'token':token})
@@ -100,7 +112,7 @@ def collector_config(request):
     recorder=PlateRecorder.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest()).first() if token else None
     if not recorder: return JsonResponse({'error':'Token inválido'},status=401)
     PlateRecorder.objects.filter(pk=recorder.pk).update(last_seen=timezone.now())
-    cameras=PlateCamera.objects.filter(recorder=recorder,enabled=True) if recorder.enabled else PlateCamera.objects.none()
+    cameras=PlateCamera.objects.filter(recorder=recorder,enabled=True) if recorder.enabled and not (recorder.integrated_enabled and recorder.username and recorder.password_encrypted) else PlateCamera.objects.none()
     response=JsonResponse({'recorder':{'id':recorder.pk,'name':recorder.name,'host':recorder.host,'port':recorder.port,'model':'Intelbras NVD 3116','enabled':recorder.enabled},'channels':[{'channel':c.channel,'name':c.name,'stream':c.stream,'roi':c.roi or [0,0,1,1]} for c in cameras.order_by('channel')]})
     response['Cache-Control']='private, no-store'
     return response

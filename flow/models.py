@@ -194,6 +194,10 @@ class PublicLink(models.Model):
 
 
 class PlateRecorder(models.Model):
+    username = models.CharField(max_length=100, blank=True)
+    password_encrypted = models.TextField(blank=True, editable=False)
+    integrated_enabled = models.BooleanField(default=True)
+
     name = models.CharField(max_length=100, unique=True)
     host = models.GenericIPAddressField(verbose_name='IP do NVR')
     port = models.PositiveIntegerField(default=554)

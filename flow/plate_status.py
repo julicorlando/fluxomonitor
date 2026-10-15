@@ -27,10 +27,12 @@ def recorder_status(recorder,cameras=None):
     online=sum(s['state']=='streaming' for s in active)
     collector='Conectado ao painel' if recorder.last_seen and now-recorder.last_seen<=WINDOW else ('Sem contato recente com o painel' if recorder.last_seen else 'Aguardando coletor local')
     if not recorder.enabled:state='disabled';label='NVR desativado'
+    elif recorder.integrated_enabled and (not recorder.username or not recorder.password_encrypted):state='pending';label='Configure o usuário e a senha do NVR para iniciar'
     elif not active:state='pending';label='Nenhum canal selecionado'
     elif online==len(active):state='streaming';label=f'Vídeo conectado · {online}/{len(active)} canais'
     elif online:state='partial';label=f'Conexão parcial · {online}/{len(active)} canais com vídeo'
     elif any(s['state']=='unavailable' for s in active):state='unavailable';label='Sem vídeo nos canais selecionados'
     elif any(s['state']=='stale' for s in active):state='stale';label='Sem atualização de vídeo do coletor'
     else:state='pending';label='Aguardando teste de vídeo pelo coletor'
+    if recorder.integrated_enabled and (not recorder.username or not recorder.password_encrypted): collector='Coletor integrado: aguardando credenciais'
     return {'id':recorder.pk,'state':state,'label':label,'collector':collector,'last_seen':stamp(recorder.last_seen),'channels':statuses}

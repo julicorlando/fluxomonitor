@@ -63,16 +63,19 @@ class LatestFrame:
         self.lock=threading.Lock()
         threading.Thread(target=self.run, daemon=True).start()
     def run(self):
+        retry_delay=2
         while True:
             cap=cv2.VideoCapture(self.source, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,5000,cv2.CAP_PROP_READ_TIMEOUT_MSEC,5000])
             while True:
                 ok,frame=cap.read()
                 if not ok: break
+                retry_delay=2
                 with self.lock:
                     self.frame=frame; self.at=time.monotonic(); self.sequence+=1
             cap.release()
             logging.warning('Vídeo indisponível; tentando reconectar')
-            time.sleep(2)
+            time.sleep(retry_delay)
+            retry_delay=min(60,retry_delay*2)
     def get(self):
         with self.lock:
             return self.frame,self.at,self.sequence

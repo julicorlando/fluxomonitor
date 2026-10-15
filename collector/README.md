@@ -61,3 +61,17 @@ Execute `python collector/nvr.py` com as variáveis exportadas. Uma instância d
 O endereço é montado no coletor: `rtsp://USUARIO:SENHA@IP:PORTA/cam/realmonitor?channel=N&subtype=0`. Caracteres especiais em usuário/senha são codificados. Não é necessário obter o IP individual das câmeras conectadas ao NVR. A integração faz leitura de vídeo ao vivo e não altera as gravações. IP e canal corretos, permissões RTSP e codec decodificável devem ser testados no equipamento real. Comece com um canal para medir consumo de CPU, carga no NVR e taxa de acerto. A tela de último contato mostra consulta de configuração pelo supervisor; não comprova abertura do vídeo. Última captura mostra ingestão concluída.
 
 A API `GET /api/v1/plates/collector-config/` aceita somente o token daquele NVR e retorna seus canais selecionados, sem usuário ou senha do equipamento. No envio multipart de capturas com token de NVR, acrescente `channel` (1–16). Tokens individuais de câmeras existentes continuam funcionando, respeitando a desativação do gravador associado. O cadastro de contagem de pessoas é independente.
+
+## Indicador de comunicação com o NVR
+
+Atualize o código do coletor e reinicie `collector/nvr.py` para habilitar o novo indicador. Cada processo de canal envia um heartbeat de vídeo a cada 10 segundos, mesmo quando nenhuma placa aparece. O status é calculado pela idade do último quadro decodificado, não por ping ou pelo recebimento de uma placa:
+
+- **Vídeo conectado:** todos os canais selecionados enviam status e quadros recentes.
+- **Conexão parcial:** parte dos canais recebe vídeo.
+- **Sem vídeo:** o coletor responde, mas não recebe quadros recentes. Confira IP/porta, credenciais, permissões, canal e codec; o indicador não identifica sozinho qual desses fatores causou a falha.
+- **Sem atualização:** heartbeat ausente há mais de 45 segundos. Não mantém verde um status antigo.
+- **Aguardando teste:** ainda não houve heartbeat desse canal.
+
+O painel atualiza os indicadores a cada 10 segundos e mostra separadamente o contato do supervisor com a aplicação, a última verificação de vídeo e o último quadro recebido. Falha de comunicação entre navegador e painel também retira a indicação de conexão. Os horários de quadro são estimados pelo servidor a partir da idade monotônica informada pelo coletor, sem depender do relógio do NVR. O indicador comprova recepção de quadros, mas não garante imagem útil, ausência de congelamento na origem ou qualidade de OCR. Nenhum frame, URL RTSP ou credencial é transmitido no heartbeat.
+
+API: `POST /api/v1/plates/heartbeat/`, autenticação Bearer do NVR + `channel`, ou token individual de câmera. Campo `frame_age` em segundos, vazio quando nenhum quadro foi recebido. Somente canais ativos do NVR autorizado podem atualizar seu status. O status administrativo está em `GET /plates/nvrs/status/` (superadmin).

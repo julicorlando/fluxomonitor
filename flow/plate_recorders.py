@@ -8,6 +8,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
+from .plate_status import recorder_status, camera_status
 from .models import PlateRecorder, PlateCamera, AuditLog
 
 class RecorderForm(forms.ModelForm):
@@ -45,7 +46,7 @@ def recorders(request,pk=None):
         obj.token_digest=hashlib.sha256(token.encode()).hexdigest()
         obj.save(update_fields=['token_digest'])
         AuditLog.objects.create(actor=request.user.username,action='update',object_type='PlateRecorder',object_id=str(obj.pk),changes={'token_rotated':True})
-        response=render(request,'plate_recorders.html',{'form':RecorderForm(instance=obj),'editing':obj,'recorders':PlateRecorder.objects.all(),'token':token})
+        response=render(request,'plate_recorders.html',{'form':RecorderForm(instance=obj),'editing':obj,'recorders':with_status(),'token':token})
         response['Cache-Control']='private, no-store'
         return response
     form=RecorderForm(request.POST or None,instance=obj)
@@ -59,7 +60,7 @@ def recorders(request,pk=None):
             AuditLog.objects.create(actor=request.user.username,action='update' if obj else 'create',object_type='PlateRecorder',object_id=str(recorder.pk),changes={'enabled':recorder.enabled,'host':recorder.host,'port':recorder.port})
         if obj: return redirect('/plates/nvrs/')
         form=RecorderForm()
-    response=render(request,'plate_recorders.html',{'form':form,'editing':obj,'recorders':PlateRecorder.objects.all(),'token':token})
+    response=render(request,'plate_recorders.html',{'form':form,'editing':obj,'recorders':with_status(),'token':token})
     response['Cache-Control']='private, no-store'
     return response
 
@@ -74,7 +75,7 @@ def channels(request,pk):
         camera=existing.get(number)
         roi=camera.roi if camera and len(camera.roi)==4 else [0,0,1,1]
         initial={'enabled':camera.enabled if camera else False,'name':camera.name.split(' · ',1)[-1] if camera else f'Canal {number}', 'stream':str(camera.stream) if camera else '0','x':roi[0],'y':roi[1],'width':roi[2],'height':roi[3]}
-        rows.append({'number':number,'camera':camera,'form':ChannelForm(request.POST if request.method=='POST' else None,prefix=f'ch{number}',initial=initial)})
+        rows.append({'number':number,'status':camera_status(camera) if camera else None,'camera':camera,'form':ChannelForm(request.POST if request.method=='POST' else None,prefix=f'ch{number}',initial=initial)})
     if request.method=='POST' and all([row['form'].is_valid() for row in rows]):
         with transaction.atomic():
             for row in rows:
@@ -89,7 +90,7 @@ def channels(request,pk):
                 camera.save()
             AuditLog.objects.create(actor=request.user.username,action='update',object_type='PlateRecorder',object_id=str(recorder.pk),changes={'enabled_channels':[r['number'] for r in rows if r['form'].cleaned_data['enabled']]})
         return redirect(f'/plates/nvrs/{pk}/channels/')
-    response=render(request,'plate_channels.html',{'recorder':recorder,'rows':rows})
+    response=render(request,'plate_channels.html',{'recorder':recorder,'rows':rows,'connection':recorder_status(recorder)})
     response['Cache-Control']='private, no-store'
     return response
 
@@ -101,5 +102,19 @@ def collector_config(request):
     PlateRecorder.objects.filter(pk=recorder.pk).update(last_seen=timezone.now())
     cameras=PlateCamera.objects.filter(recorder=recorder,enabled=True) if recorder.enabled else PlateCamera.objects.none()
     response=JsonResponse({'recorder':{'id':recorder.pk,'name':recorder.name,'host':recorder.host,'port':recorder.port,'model':'Intelbras NVD 3116','enabled':recorder.enabled},'channels':[{'channel':c.channel,'name':c.name,'stream':c.stream,'roi':c.roi or [0,0,1,1]} for c in cameras.order_by('channel')]})
+    response['Cache-Control']='private, no-store'
+    return response
+
+
+def with_status():
+    recorders=list(PlateRecorder.objects.prefetch_related('platecamera_set').all())
+    for nvr in recorders: nvr.connection=recorder_status(nvr)
+    return recorders
+
+@login_required
+@user_passes_test(lambda u:u.is_superuser)
+@require_GET
+def status(request):
+    response=JsonResponse({'recorders':[n.connection for n in with_status()]})
     response['Cache-Control']='private, no-store'
     return response

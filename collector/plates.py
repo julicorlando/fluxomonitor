@@ -77,6 +77,24 @@ class LatestFrame:
         with self.lock:
             return self.frame,self.at,self.sequence
 
+def video_report(video):
+    _,at,_=video.get()
+    age=max(0,time.monotonic()-at) if at else None
+    return {'frame_age':age if age is not None and age<=86400 else ''}
+
+
+def report_video(video,url,token):
+    while True:
+        try:
+            data=video_report(video)
+            data['channel']=os.environ.get('PLATES_CHANNEL','')
+            response=requests.post(url+'/api/v1/plates/heartbeat/',headers={'Authorization':'Bearer '+token},data=data,timeout=(5,5),allow_redirects=False)
+            if response.status_code!=200: logging.warning('Status de vídeo não recebido: HTTP %s',response.status_code)
+        except requests.RequestException:
+            logging.warning('Status de vídeo: painel indisponível')
+        time.sleep(10)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     url=os.environ['PLATES_BASE_URL'].rstrip('/')
@@ -93,6 +111,7 @@ def main():
     db.execute('CREATE TABLE IF NOT EXISTS queue (event TEXT PRIMARY KEY, plate TEXT, captured TEXT, confidence REAL, image BLOB)')
     consensus=Consensus()
     video=LatestFrame(source); next_send=0; last_sequence=0
+    threading.Thread(target=report_video,args=(video,url,token),daemon=True).start()
     while True:
         now=time.monotonic()
         if now>=next_send:

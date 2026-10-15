@@ -27,6 +27,7 @@ class CleanupTests(TestCase):
         self.assertEqual(batch.affected_days,{str(self.day):[self.camera.pk]})
         restore(batch.pk,'test');restore(batch.pk,'test')
         self.assertEqual(Reading.objects.count(),2)
+        self.assertEqual(Reading.objects.get(pk=historical.pk).timestamp,historical.timestamp)
         job.refresh_from_db();self.assertEqual(job.status,'cancelled')
     def test_cleanup_and_restore_require_superuser(self):
         self.reading('pfc-event:1','pfc-history')
@@ -64,6 +65,7 @@ class PublicLinkTests(TestCase):
             self.assertEqual(response['Cache-Control'],'private, no-store, max-age=0')
         page=self.client.get('/public/testtoken/',{'mode':'month','reference':str(self.day)})
         self.assertContains(page,'Imprimir / salvar PDF');self.assertNotContains(page,'Menu principal')
+        self.assertContains(page,'value="2025-05-10"')
         self.assertEqual(self.client.get('/public/testtoken/data/',{'mode':'year','reference':'2023-01-01'}).status_code,400)
     def test_expiry_revocation_and_invalid_link(self):
         self.link.expires_at=timezone.now()-timedelta(seconds=1);self.link.save()

@@ -35,7 +35,7 @@ def cleanup(actor):
             day=row['timestamp'].astimezone(ZONE).date().isoformat()
             days.setdefault(day,[])
             if row['camera_id'] not in days[day]:days[day].append(row['camera_id'])
-        data=json.loads(json.dumps({'jobs':jobs,'readings':rows},cls=DjangoJSONEncoder))
+        data=json.loads(json.dumps({'jobs':jobs,'readings':[{**row,'timestamp':row['timestamp'].isoformat()} for row in rows]},cls=DjangoJSONEncoder))
         archive=ImportCleanup.objects.create(actor=actor,data=data,affected_days=days)
         Reading.objects.filter(pk__in=[r['id'] for r in rows]).delete()
         HistoryImport.objects.filter(pk__in=[j['id'] for j in jobs]).update(status='archived')

@@ -14,7 +14,7 @@ class ImportForm(forms.ModelForm):
         model=HistoryImport
         fields=['camera','start','end']
         labels={'camera':'Dispositivo','start':'Data inicial','end':'Data final'}
-        widgets={'start':forms.DateInput(attrs={'type':'date'}),'end':forms.DateInput(attrs={'type':'date'})}
+        widgets={'start':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}),'end':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'})}
     def __init__(self,*a,**kwargs):
         super().__init__(*a,**kwargs)
         ips=[v.strip() for v in os.environ.get('PFC_PULL_IPS','').split(',') if v.strip()]

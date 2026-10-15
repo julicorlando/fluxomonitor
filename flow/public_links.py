@@ -23,7 +23,7 @@ class LinkForm(forms.ModelForm):
         model=PublicLink
         fields=['label','camera','start','end']
         labels={'label':'Nome do link','camera':'Dispositivo (vazio = todos incluídos na soma)','start':'Histórico permitido desde','end':'Histórico permitido até'}
-        widgets={'start':forms.DateInput(attrs={'type':'date'}),'end':forms.DateInput(attrs={'type':'date'})}
+        widgets={'start':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}),'end':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'})}
     def clean(self):
         data=super().clean();start=data.get('start');end=data.get('end')
         if start and end and (start>end or start<date(2000,1,1) or end>timezone.now().astimezone(ZONE).date()):raise forms.ValidationError('Informe um período válido, de 2000 até hoje.')
@@ -53,8 +53,8 @@ def manage(request):
 
 class CompareForm(forms.Form):
     mode=forms.ChoiceField(label='Comparar por',choices=[('day','Dia a dia'),('month','Mês a mês'),('year','Ano a ano')])
-    reference=forms.DateField(label='Data de referência',widget=forms.DateInput(attrs={'type':'date'}))
-    compare=forms.DateField(label='Comparar com (opcional)',required=False,widget=forms.DateInput(attrs={'type':'date'}))
+    reference=forms.DateField(label='Data de referência',widget=forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}))
+    compare=forms.DateField(label='Comparar com (opcional)',required=False,widget=forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}))
 
 def period(mode,reference,link):
     today=timezone.now().astimezone(ZONE).date()

@@ -101,6 +101,8 @@ class TodayReimportTests(TestCase):
         yesterday=Reading.objects.create(camera=camera,event_id='pfc-event:2',timestamp=timezone.now()-timedelta(days=1),entries=1,exits=0,mode='delta',raw=raw)
         PullCursor.objects.create(camera=camera,offset=100)
         archive,jobs=reimport_today('test')
+        from .models import AuditLog
+        for audit in AuditLog.objects.all():AuditLog._meta.get_field('action').clean(audit.action,audit)
         self.assertEqual(len(jobs),2);self.assertEqual({j.camera_id for j in jobs},{camera.pk,source.pk})
         self.assertTrue(all(j.start==day and j.end==day for j in jobs))
         self.assertFalse(Reading.objects.filter(pk=today.pk).exists());self.assertTrue(Reading.objects.filter(pk=yesterday.pk).exists())

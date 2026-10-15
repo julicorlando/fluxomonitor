@@ -86,5 +86,5 @@ def reimport_today(actor):
             raise ValueError('Há dados de outra origem hoje; limpeza automática bloqueada')
         archive=cleanup(actor,day=day)
         jobs=[HistoryImport.objects.create(camera=c,start=day,end=day) for c in sources.values()]
-        AuditLog.objects.create(actor=actor,action='history_reimport_today',object_type='ImportCleanup',object_id=str(archive.pk if archive else ''),changes={'day':str(day),'jobs':[j.pk for j in jobs]})
+        AuditLog.objects.create(actor=actor,action='history_today_reset',object_type='ImportCleanup',object_id=str(archive.pk if archive else ''),changes={'day':str(day),'jobs':[j.pk for j in jobs]})
         return archive,jobs

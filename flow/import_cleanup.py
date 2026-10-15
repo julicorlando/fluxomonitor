@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from .models import Camera,HistoryImport,ImportCleanup,Reading,AuditLog,ScheduledSummary
-from .services import close_day,report,ZONE
+from .services import close_day,report,ZONE,bounds
 
 FIELDS=['id','camera_id','event_id','timestamp','entries','exits','mode','counter_epoch','raw_id']
 def imported_readings():
@@ -24,11 +24,17 @@ def recalculate(days):
             summary.data={'days':reports,'passages':sum(d['totals']['passages'] for d in reports)}
         summary.save(update_fields=['data'])
 
-def cleanup(actor):
+def cleanup(actor,day=None):
     with transaction.atomic():
         list(Camera.objects.select_for_update().order_by('ip','replica_slot','id'))
-        jobs=list(HistoryImport.objects.select_for_update().exclude(status='archived').values('id','status'))
-        rows=list(imported_readings().values(*FIELDS))
+        jobs_query=HistoryImport.objects.select_for_update().exclude(status='archived')
+        readings=imported_readings()
+        if day is not None:
+            start,end=bounds(day)
+            jobs_query=jobs_query.filter(start__lte=day,end__gte=day)
+            readings=Reading.objects.filter(timestamp__gte=start,timestamp__lt=end)
+        jobs=list(jobs_query.values('id','status'))
+        rows=list(readings.values(*FIELDS))
         if not jobs and not rows:return None
         days={}
         for row in rows:
@@ -40,7 +46,7 @@ def cleanup(actor):
         Reading.objects.filter(pk__in=[r['id'] for r in rows]).delete()
         HistoryImport.objects.filter(pk__in=[j['id'] for j in jobs]).update(status='archived')
         recalculate(days)
-        AuditLog.objects.create(actor=actor,action='history_cleanup',object_type='ImportCleanup',object_id=str(archive.pk),changes={'jobs':len(jobs),'readings':len(rows),'days':days})
+        AuditLog.objects.create(actor=actor,action='history_cleanup',object_type='ImportCleanup',object_id=str(archive.pk),changes={'jobs':len(jobs),'readings':len(rows),'days':days,'scope':'today' if day is not None else 'imports'})
         return archive
 
 def restore(archive_id,actor):
@@ -60,3 +66,25 @@ def restore(archive_id,actor):
         archive.restored_at=timezone.now();archive.save(update_fields=['restored_at'])
         recalculate(archive.affected_days)
         AuditLog.objects.create(actor=actor,action='history_restore',object_type='ImportCleanup',object_id=str(archive.pk),changes={})
+
+
+def reimport_today(actor):
+    import os
+    day=timezone.now().astimezone(ZONE).date()
+    ips={ip.strip() for ip in os.getenv('PFC_PULL_IPS','').split(',') if ip.strip()}
+    with transaction.atomic():
+        cameras=list(Camera.objects.select_for_update().filter(enabled=True).order_by('ip','replica_slot','id'))
+        sources={}
+        for camera in cameras:
+            if camera.ip in ips:sources.setdefault(camera.ip,camera)
+        if not sources:raise ValueError('Nenhum equipamento PFC configurado para reimportação')
+        # This action must never erase data from a source we cannot repull.
+        start,end=bounds(day)
+        if Reading.objects.filter(timestamp__gte=start,timestamp__lt=end).exclude(camera__in=[c for c in cameras if c.ip in ips]).exists():
+            raise ValueError('Há dados de hoje em equipamento sem consulta PFC; limpeza bloqueada')
+        if Reading.objects.filter(timestamp__gte=start,timestamp__lt=end).exclude(event_id__startswith='pfc-event:',mode='delta').exists():
+            raise ValueError('Há dados de outra origem hoje; limpeza automática bloqueada')
+        archive=cleanup(actor,day=day)
+        jobs=[HistoryImport.objects.create(camera=c,start=day,end=day) for c in sources.values()]
+        AuditLog.objects.create(actor=actor,action='history_reimport_today',object_type='ImportCleanup',object_id=str(archive.pk if archive else ''),changes={'day':str(day),'jobs':[j.pk for j in jobs]})
+        return archive,jobs

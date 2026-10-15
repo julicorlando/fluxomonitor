@@ -35,12 +35,13 @@ def imports(request):
     today=timezone.now().astimezone(ZONE).date()
     form=ImportForm(initial={'start':today-timedelta(days=89),'end':today})
     if request.method=='POST':
-        if request.POST.get('action') in ('cleanup','restore'):
+        if request.POST.get('action') in ('cleanup','restore','reimport_today'):
             if not request.user.is_superuser:
                 from django.http import HttpResponseForbidden
                 return HttpResponseForbidden()
-            from .import_cleanup import cleanup,restore
-            if request.POST['action']=='cleanup':cleanup(request.user.get_username())
+            from .import_cleanup import cleanup,restore,reimport_today
+            if request.POST['action']=='reimport_today':reimport_today(request.user.get_username())
+            elif request.POST['action']=='cleanup':cleanup(request.user.get_username())
             else:restore(int(request.POST.get('archive_id','0')),request.user.get_username())
             return redirect('/imports/')
         if request.POST.get('action')=='retry':

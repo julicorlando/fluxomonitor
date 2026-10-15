@@ -87,3 +87,22 @@ class PublicLinkTests(TestCase):
     def test_cumulative_is_not_silently_summed(self):
         Reading.objects.filter(camera=self.camera).update(mode='cumulative')
         with self.assertRaisesMessage(ValueError,'acumulados'):analytics(self.link,'year',self.day)
+
+class TodayReimportTests(TestCase):
+    @patch.dict('os.environ',{'PFC_PULL_IPS':'192.168.1.235,192.168.1.237'})
+    def test_today_only_is_backed_up_and_one_job_per_physical_device(self):
+        from .import_cleanup import reimport_today
+        day=timezone.now().astimezone(ZONE).date()
+        camera=Camera.objects.create(ip='192.168.1.235',name='A')
+        source=Camera.objects.create(ip='192.168.1.237',name='B')
+        target=Camera.objects.create(ip='192.168.1.237',name='Replica')
+        raw=RawDelivery.objects.create(camera=camera,payload={'source':'pfc-pull'})
+        today=Reading.objects.create(camera=camera,event_id='pfc-event:1',timestamp=timezone.now()-timedelta(seconds=5),entries=1,exits=0,mode='delta',raw=raw)
+        yesterday=Reading.objects.create(camera=camera,event_id='pfc-event:2',timestamp=timezone.now()-timedelta(days=1),entries=1,exits=0,mode='delta',raw=raw)
+        PullCursor.objects.create(camera=camera,offset=100)
+        archive,jobs=reimport_today('test')
+        self.assertEqual(len(jobs),2);self.assertEqual({j.camera_id for j in jobs},{camera.pk,source.pk})
+        self.assertTrue(all(j.start==day and j.end==day for j in jobs))
+        self.assertFalse(Reading.objects.filter(pk=today.pk).exists());self.assertTrue(Reading.objects.filter(pk=yesterday.pk).exists())
+        self.assertEqual(PullCursor.objects.get(camera=camera).offset,100)
+        restore(archive.pk,'test');self.assertTrue(Reading.objects.filter(pk=today.pk).exists())

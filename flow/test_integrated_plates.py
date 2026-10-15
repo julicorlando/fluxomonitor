@@ -44,14 +44,16 @@ class IntegratedPlateTests(TestCase):
         self.assertNotEqual(first[self.camera.pk],channel_plan()[self.camera.pk])
         self.camera.enabled=False;self.camera.save();self.assertEqual(channel_plan(),{})
         self.camera.enabled=True;self.camera.save();self.nvr.integrated_enabled=False;self.nvr.save();self.assertEqual(channel_plan(),{})
+    @patch('flow.plate_worker.os.killpg')
     @patch('flow.plate_worker.subprocess.Popen')
-    def test_supervisor_lifecycle_and_no_password_in_process_args(self,popen):
+    def test_supervisor_lifecycle_and_no_password_in_process_args(self,popen,killpg):
         process=Mock();process.poll.return_value=None;popen.return_value=process;children={}
         self.configure();plan=channel_plan();sync_children(children,plan)
         args=popen.call_args.args[0]
         self.assertNotIn('a-secret-password',str(args));self.assertIn('read_plate_channel',args)
         sync_children(children,plan);self.assertEqual(popen.call_count,1)
-        sync_children(children,{});process.terminate.assert_called_once();self.assertEqual(children,{})
+        sync_children(children,{});self.assertEqual(killpg.call_count,2);self.assertEqual(children,{})
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
     def test_spool_idempotency_and_disabled_preservation(self):
         self.configure();db=sqlite3.connect(':memory:')
         db.execute('CREATE TABLE queue (event TEXT PRIMARY KEY,plate TEXT,captured TEXT,confidence REAL,image BLOB)')

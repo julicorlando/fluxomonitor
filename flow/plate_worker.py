@@ -31,11 +31,16 @@ def channel_plan():
 
 
 def terminate(process):
+    # Each channel owns a session, including any running Tesseract subprocess.
+    # Clean the group even when its Python parent has already exited.
+    try:os.killpg(process.pid,signal.SIGTERM)
+    except ProcessLookupError:pass
     if process.poll() is None:
-        process.terminate()
         try:process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            process.kill();process.wait()
+        except subprocess.TimeoutExpired:pass
+    try:os.killpg(process.pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    process.wait()
 
 
 def sync_children(children,plan):
@@ -45,7 +50,7 @@ def sync_children(children,plan):
             terminate(process);del children[pk]
     for pk,fingerprint in plan.items():
         if pk not in children:
-            process=subprocess.Popen([sys.executable,str(settings.BASE_DIR/'manage.py'),'read_plate_channel',str(pk)])
+            process=subprocess.Popen([sys.executable,str(settings.BASE_DIR/'manage.py'),'read_plate_channel',str(pk)],start_new_session=True)
             children[pk]=(process,fingerprint)
             logging.info('Leitura integrada iniciada no canal cadastrado %s',pk)
 
@@ -84,15 +89,35 @@ def save_pending(db,camera_id):
     db.execute('DELETE FROM queue WHERE event=?',(event,));db.commit()
 
 
+def report_channel_video(video,camera_id,stopped):
+    """Keep video health current while OCR runs or waits for its timeout."""
+    from collector.plates import video_report
+    try:
+        while not stopped.is_set():
+            try:
+                age=video_report(video)['frame_age'];checked=timezone.now()
+                values={'video_checked_at':checked,'video_status':'streaming' if age!='' and age<=3 else 'unavailable'}
+                if age!='':values['last_frame_at']=checked-timedelta(seconds=age)
+                close_old_connections()
+                active=PlateCamera.objects.filter(pk=camera_id,enabled=True,recorder__enabled=True,recorder__integrated_enabled=True)
+                if not active.update(**values):
+                    stopped.set();break
+            except Exception as error:
+                logging.warning('Status do canal %s pendente (%s)',camera_id,type(error).__name__)
+                connections.close_all()
+            stopped.wait(10)
+    finally:connections.close_all()
+
+
 def read_channel(camera_id):
     # Optional heavy dependencies load only in the dedicated plates container.
-    from collector.plates import LatestFrame, Consensus, read_plate, video_report
+    from collector.plates import LatestFrame, Consensus, read_plate
     from collector.nvr import rtsp_url
     import cv2
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
     stopped=threading.Event()
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:stopped.set())
-    db=None
+    db=None;reporter=None
     try:
         camera=PlateCamera.objects.select_related('recorder').get(pk=camera_id)
         nvr=camera.recorder
@@ -108,20 +133,10 @@ def read_channel(camera_id):
         fd=os.open(filename,os.O_CREAT|os.O_RDWR,0o600);os.close(fd);os.chmod(filename,0o600)
         db=sqlite3.connect(filename)
         db.execute('CREATE TABLE IF NOT EXISTS queue (event TEXT PRIMARY KEY, plate TEXT, captured TEXT, confidence REAL, image BLOB)')
-        video=LatestFrame(source);consensus=Consensus();last_sequence=0;next_status=0
+        video=LatestFrame(source);consensus=Consensus();last_sequence=0
+        reporter=threading.Thread(target=report_channel_video,args=(video,camera_id,stopped),daemon=True)
+        reporter.start()
         while not stopped.is_set():
-            now=time.monotonic()
-            if now>=next_status:
-                age=video_report(video)['frame_age'];checked=timezone.now()
-                values={'video_checked_at':checked,'video_status':'streaming' if age!='' and age<=3 else 'unavailable'}
-                if age!='':values['last_frame_at']=checked-timedelta(seconds=age)
-                try:
-                    close_old_connections()
-                    active=PlateCamera.objects.filter(pk=camera_id,enabled=True,recorder__enabled=True,recorder__integrated_enabled=True)
-                    if not active.update(**values):break
-                    next_status=now+10
-                except Exception as error:
-                    logging.warning('Status do canal %s pendente (%s)',camera_id,type(error).__name__);connections.close_all();next_status=now+5
             try:save_pending(db,camera_id)
             except Exception as error:
                 logging.warning('Captura do canal %s preservada na fila (%s)',camera_id,type(error).__name__);connections.close_all()
@@ -147,5 +162,7 @@ def read_channel(camera_id):
     except Exception as error:
         logging.error('Canal %s interrompido (%s). Confira configuração e armazenamento.',camera_id,type(error).__name__)
     finally:
+        stopped.set()
+        if reporter:reporter.join(timeout=2)
         if db:db.close()
         connections.close_all()

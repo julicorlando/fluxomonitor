@@ -34,6 +34,20 @@ def imports(request):
     today=timezone.now().astimezone(ZONE).date()
     form=ImportForm(initial={'start':today-timedelta(days=89),'end':today})
     if request.method=='POST':
+        if request.POST.get('action')=='retry':
+            with transaction.atomic():
+                candidate=HistoryImport.objects.filter(pk=request.POST.get('job_id')).first()
+                if candidate:
+                    camera=Camera.objects.select_for_update().get(pk=candidate.camera_id)
+                    job=HistoryImport.objects.select_for_update().get(pk=candidate.pk)
+                    if job.status in ('failed','cancelled') and not HistoryImport.objects.filter(camera=camera,status__in=['pending','running']).exists():
+                        # Re-scan the retained buffer, including records an old
+                        # timestamp search may have skipped. Readings remain deduplicated.
+                        job.status='pending';job.initialized=False;job.offset=0
+                        job.scanned=0;job.imported=0;job.last_timestamp=None
+                        job.earliest_available=None;job.error='';job.save()
+                        AuditLog.objects.create(actor=request.user.get_username(),action='history_retry',object_type='HistoryImport',object_id=str(job.pk),changes={})
+            return redirect('/imports/')
         if request.POST.get('action')=='cancel':
             with transaction.atomic():
                 job=HistoryImport.objects.select_for_update().filter(pk=request.POST.get('job_id')).first()

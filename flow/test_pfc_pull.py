@@ -121,3 +121,17 @@ class PullTests(TestCase):
         fetch.assert_not_called()
         self.assertEqual(Reading.objects.filter(camera=target).count(),2)
         self.assertEqual(sum(Reading.objects.values_list('entries',flat=True)),2)
+
+    @patch.dict(os.environ,{'PFC_SERVICE_SECRET':'test'})
+    @patch('flow.pfc_pull.urlopen')
+    def test_fetch_accepts_clock_rollback_but_rejects_ambiguous_ids(self,open_url):
+        import json
+        from flow.pfc_pull import fetch
+        events=[self.event(10,t=0),self.event(11,t=-3600)]
+        payload={'result':{'isError':'false','code':'0'},'rptQuantity':2,'PassengerFlowData':events}
+        open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+        self.assertEqual(fetch(self.c,10,2),events)
+        events[1]['idIndex']=10
+        open_url.return_value.__enter__.return_value.read.return_value=json.dumps(payload).encode()
+        with self.assertRaisesMessage(ProtocolError,'IDs de eventos'):
+            fetch(self.c,10,2)

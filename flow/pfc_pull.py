@@ -40,7 +40,9 @@ def fetch(camera,offset,quantity=100):
     previous=None
     for e in events:
         if not isinstance(e,dict) or any(type(e.get(k)) is not int or e[k]<0 for k in ('idIndex','timestamp','eventType')):raise ProtocolError('Evento inválido',diagnostic)
-        if previous and (e['idIndex']<=previous['idIndex'] or e['timestamp']<previous['timestamp']):raise ProtocolError('Eventos fora de ordem',diagnostic)
+        # The device clock can move backwards after synchronization. Pagination
+        # follows idIndex, never timestamp; reject ambiguous IDs, not clock changes.
+        if previous and e['idIndex']<=previous['idIndex']:raise ProtocolError('IDs de eventos repetidos ou fora de ordem',diagnostic)
         previous=e
     return events
 

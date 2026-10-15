@@ -19,12 +19,21 @@ PATTERN = re.compile(r'(?:[A-Z]{3}[0-9]{4}|[A-Z]{3}[0-9][A-Z][0-9]{2})')
 
 def read_plate(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=3, fy=3)
+    # Bound work even when an uncalibrated channel uses the whole 4K frame.
+    h,w = gray.shape[:2]
+    scale = min(3,1600/w,1000/h)
+    gray = cv2.resize(gray, None, fx=scale, fy=scale)
     gray = cv2.copyMakeBorder(gray,15,15,15,15,cv2.BORDER_CONSTANT,value=220)
     variants = [gray, cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]]
     candidates = []
     for image, psm in [(v, mode) for v in variants for mode in (7,11)]:
-        data = pytesseract.image_to_data(image, config=f'--psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', output_type=pytesseract.Output.DICT)
+        try:
+            data = pytesseract.image_to_data(image, config=f'--psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', output_type=pytesseract.Output.DICT, timeout=2)
+        except RuntimeError as error:
+            if 'timeout' not in str(error).lower():
+                raise
+            logging.warning('OCR excedeu o limite de tempo; calibre a área da placa')
+            break
         # OCR can split a plate into adjacent tokens. Join tokens only within a line.
         lines = collections.defaultdict(list)
         for i, text in enumerate(data['text']):

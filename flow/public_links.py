@@ -3,6 +3,7 @@ from datetime import date,datetime,time,timedelta
 from django import forms
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.db.models import Sum,Min
+from django.db import transaction
 from django.db.models.functions import TruncHour,TruncDate,TruncMonth
 from django.http import HttpResponse,JsonResponse
 from django.shortcuts import render,redirect
@@ -18,7 +19,7 @@ def protected(response):
     return response
 
 class LinkForm(forms.ModelForm):
-    duration=forms.IntegerField(label='Validade em minutos',min_value=1,max_value=43200,initial=60,help_text='De 1 minuto a 30 dias. Pode revogar a qualquer momento.')
+    duration_days=forms.IntegerField(label='Validade em dias',min_value=1,max_value=365,initial=7,help_text='De 1 a 365 dias. Pode prorrogar o mesmo link ou revogar a qualquer momento.')
     class Meta:
         model=PublicLink
         fields=['label','camera','start','end']
@@ -32,24 +33,36 @@ class LinkForm(forms.ModelForm):
 @login_required
 @user_passes_test(lambda u:u.is_superuser)
 def manage(request):
-    today=timezone.now().astimezone(ZONE).date();url=None
+    today=timezone.now().astimezone(ZONE).date();url=None;extension_error=None
     earliest=Reading.objects.aggregate(first=Min('timestamp'))['first']
     form=LinkForm(initial={'start':earliest.astimezone(ZONE).date() if earliest else today,'end':today})
     if request.method=='POST':
-        if request.POST.get('action')=='revoke':
+        if request.POST.get('action')=='extend':
+            try:
+                days=int(request.POST.get('days','0'))
+                if not 1<=days<=365:raise ValueError()
+                with transaction.atomic():
+                    link=PublicLink.objects.select_for_update().filter(pk=request.POST.get('link_id'),revoked_at__isnull=True).first()
+                    if not link:raise ValueError()
+                    link.expires_at=max(timezone.now(),link.expires_at)+timedelta(days=days)
+                    link.save(update_fields=['expires_at'])
+                    AuditLog.objects.create(actor=request.user.get_username(),action='public_link_extend',object_type='PublicLink',object_id=str(link.pk),changes={'added_days':days,'expires_at':link.expires_at.isoformat()})
+                return redirect('/public-links/')
+            except (ValueError,OverflowError):extension_error='Informe de 1 a 365 dias para um link que não esteja revogado.'
+        elif request.POST.get('action')=='revoke':
             link=PublicLink.objects.filter(pk=request.POST.get('link_id'),revoked_at__isnull=True).first()
             if link:
                 link.revoked_at=timezone.now();link.save(update_fields=['revoked_at'])
                 AuditLog.objects.create(actor=request.user.get_username(),action='public_link_revoke',object_type='PublicLink',object_id=str(link.pk),changes={})
             return redirect('/public-links/')
-        form=LinkForm(request.POST)
-        if form.is_valid():
+        form=LinkForm(request.POST) if not extension_error else form
+        if not extension_error and form.is_valid():
             token=secrets.token_urlsafe(32);link=form.save(commit=False)
             link.digest=hashlib.sha256(token.encode()).hexdigest();link.actor=request.user.get_username()
-            link.expires_at=timezone.now()+timedelta(minutes=form.cleaned_data['duration']);link.save()
+            link.expires_at=timezone.now()+timedelta(days=form.cleaned_data['duration_days']);link.save()
             url=request.build_absolute_uri('/public/'+token+'/')
             AuditLog.objects.create(actor=link.actor,action='public_link_create',object_type='PublicLink',object_id=str(link.pk),changes={'start':str(link.start),'end':str(link.end),'expires_at':link.expires_at.isoformat(),'camera_id':link.camera_id})
-    return protected(render(request,'public_links.html',{'form':form,'public_url':url,'links':PublicLink.objects.select_related('camera').order_by('-id')[:100]}))
+    return protected(render(request,'public_links.html',{'form':form,'public_url':url,'extension_error':extension_error,'links':PublicLink.objects.select_related('camera').order_by('-id')[:100]}))
 
 class CompareForm(forms.Form):
     mode=forms.ChoiceField(label='Comparar por',choices=[('day','Dia a dia'),('month','Mês a mês'),('year','Ano a ano')])

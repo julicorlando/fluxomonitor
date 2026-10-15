@@ -78,12 +78,24 @@ class PublicLinkTests(TestCase):
         ordinary=User.objects.create_user('ordinary',is_staff=True);self.client.force_login(ordinary)
         self.assertEqual(self.client.post('/public-links/',{}).status_code,302)
         self.client.force_login(self.user)
-        response=self.client.post('/public-links/',{'label':'Relatório','duration':60,'start':'2024-01-01','end':'2025-12-31','camera':self.camera.pk})
+        response=self.client.post('/public-links/',{'label':'Relatório','duration_days':7,'start':'2024-01-01','end':'2025-12-31','camera':self.camera.pk})
         self.assertContains(response,'Link público gerado')
         created=PublicLink.objects.latest('id');self.assertEqual(len(created.digest),64)
         from .models import AuditLog
         self.assertNotIn(created.digest,str(AuditLog.objects.latest('id').changes))
         self.client.post('/public-links/',{'action':'revoke','link_id':created.pk});created.refresh_from_db();self.assertIsNotNone(created.revoked_at)
+    def test_extend_same_link_expired_allowed_revoked_blocked(self):
+        self.client.force_login(self.user)
+        expiry=self.link.expires_at;digest=self.link.digest
+        self.client.post('/public-links/',{'action':'extend','link_id':self.link.pk,'days':3})
+        self.link.refresh_from_db();self.assertEqual(self.link.expires_at,expiry+timedelta(days=3));self.assertEqual(self.link.digest,digest)
+        self.link.expires_at=timezone.now()-timedelta(days=2);self.link.save()
+        self.client.post('/public-links/',{'action':'extend','link_id':self.link.pk,'days':1})
+        self.link.refresh_from_db();self.assertGreater(self.link.expires_at,timezone.now())
+        self.link.revoked_at=timezone.now();self.link.save();expiry=self.link.expires_at
+        response=self.client.post('/public-links/',{'action':'extend','link_id':self.link.pk,'days':1})
+        self.link.refresh_from_db();self.assertEqual(self.link.expires_at,expiry);self.assertContains(response,'não esteja revogado')
+
     def test_cumulative_is_not_silently_summed(self):
         Reading.objects.filter(camera=self.camera).update(mode='cumulative')
         with self.assertRaisesMessage(ValueError,'acumulados'):analytics(self.link,'year',self.day)

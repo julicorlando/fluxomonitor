@@ -1,4 +1,25 @@
-# Piloto de leitura de placas — Fluxo
+# Coletor integrado de placas — Fluxo
+
+## Fluxo recomendado: tudo no projeto existente
+
+O Compose inclui o serviço **plates**, com OpenCV e Tesseract em uma imagem dedicada. Ele inicia automaticamente `python manage.py run_plate_worker`, sem precisar instalar programas em outro computador ou configurar token local. Não publica portas. Precisa alcançar o NVR pela rede do servidor do Coolify.
+
+1. Abra **Placas > NVRs e canais > Editar conexão**.
+2. Informe usuário e senha do gravador; mantenha **Coletor integrado ativo** e **NVR ativo** marcados.
+3. Salve e selecione os canais das cancelas. Calibre a área de leitura de cada canal.
+4. O supervisor lê a configuração a cada 10 segundos, inicia somente os canais selecionados e publica o status de vídeo e as capturas no banco da aplicação. Não é necessário redeploy após mudar credenciais ou canais.
+
+A senha é cifrada com Fernet autenticado, usando chave derivada com separação de domínio da SECRET_KEY da aplicação. Não aparece novamente em formulários, API, argumentos de processos ou auditoria. Ao editar, deixe a senha vazia para preservá-la. Faça backup da SECRET_KEY junto dos procedimentos de recuperação; trocar a chave sem manter a anterior em SECRET_KEY_FALLBACKS exige recadastrar as senhas dos NVRs. O usuário com permissão de administrar o servidor/aplicação consegue acessar as credenciais; a cifra protege o banco isoladamente.
+
+O volume **fluxo_plates** guarda a fila persistente por câmera quando o banco estiver indisponível. Reenvios usam UUID fixo e não duplicam eventos. Desativar canal/NVR interrompe novas gravações e preserva filas. Não execute múltiplas réplicas do supervisor; o serviço Compose é uma instância com um processo por canal. O `collector` existente de contagem de pessoas permanece independente.
+
+Após redeploy, valide no Coolify se **plates** iniciou. Sem credenciais, ele fica aguardando configuração e não abre conexões RTSP. Depois de salvar, o NVR só fica com vídeo conectado ao receber quadros recentes; isso não garante acerto do OCR. Placas exigem calibração e testes reais de dia/noite. A imagem da aplicação web não inclui as dependências pesadas de visão.
+
+## Modo externo (opcional e legado)
+
+Desmarque **Coletor integrado ativo** para usar as instruções externas abaixo. Quando há credenciais e modo integrado ativo, a API de configuração externa retorna seleção vazia para evitar duas leituras simultâneas do mesmo NVR. Os tokens continuam disponíveis para integrações externas; o serviço integrado não precisa deles.
+
+# Referência do coletor externo
 
 O painel está em `/plates/`, integrado às páginas Django atuais. O projeto ainda não tem frontend React. Fotos exigem login; consulta é liberada aos usuários existentes; revisão é restrita a staff; câmeras e tokens ao superadmin. Links públicos de BI não expõem placas.
 

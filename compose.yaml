@@ -44,6 +44,26 @@ services:
     depends_on:
       web:
         condition: service_started
+  plates:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY}
+      DATABASE_URL: postgres://fluxo:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@db:5432/fluxo
+      OPENCV_LOG_LEVEL: SILENT
+      OPENCV_FFMPEG_LOGLEVEL: "-8"
+      OPENCV_FFMPEG_CAPTURE_OPTIONS: "rtsp_transport;tcp"
+      PLATES_QUEUE_DIR: /data/queues
+    volumes:
+      - fluxo_plates:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      web:
+        condition: service_started
   history:
     build: .
     restart: unless-stopped
@@ -85,6 +105,7 @@ services:
       interval: 5s
       retries: 10
 volumes:
+  fluxo_plates:
   fluxo_mqtt:
   fluxo_db:
   fluxo_whatsapp:

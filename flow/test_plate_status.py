@@ -10,7 +10,7 @@ from collector.plates import video_report
 
 class VideoStatusTests(TestCase):
     def setUp(self):
-        self.nvr=PlateRecorder.objects.create(name='NVR',host='192.168.1.8',token_digest=hashlib.sha256(b'nvr-token').hexdigest())
+        self.nvr=PlateRecorder.objects.create(name='NVR',host='192.168.1.8',integrated_enabled=False,token_digest=hashlib.sha256(b'nvr-token').hexdigest())
         self.camera=PlateCamera.objects.create(name='Entrada',recorder=self.nvr,channel=1,token_digest=hashlib.sha256(b'camera-token').hexdigest())
     def heartbeat(self,age='',channel=1,token='nvr-token'):
         return self.client.post('/api/v1/plates/heartbeat/',{'frame_age':age,'channel':channel},HTTP_AUTHORIZATION='Bearer '+token)

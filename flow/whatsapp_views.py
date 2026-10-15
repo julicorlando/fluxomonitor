@@ -1,12 +1,14 @@
 import re
-from datetime import time
+from datetime import time,timedelta
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.http import HttpResponse
 from django.shortcuts import render,redirect
-from .models import WhatsAppConfig,WhatsAppDelivery
-from .whatsapp import gateway,start_session,session_info,list_groups,send_test,recipients
+from .models import WhatsAppConfig,WhatsAppDelivery,HistoryImport,Camera,AuditLog
+from django.utils import timezone
+from .services import report,ZONE
+from .whatsapp import gateway,start_session,session_info,list_groups,send_test,recipients,daily_times,flow_message,final_time
 
 class ConfigForm(forms.ModelForm):
     send_count=forms.IntegerField(label='Quantidade de envios por dia',min_value=1,max_value=24)
@@ -48,7 +50,8 @@ class ConfigForm(forms.ModelForm):
 @login_required
 @user_passes_test(lambda u:u.is_superuser)
 def settings(request):
-    cfg,_=WhatsAppConfig.objects.get_or_create(pk=1)
+    cfg,created=WhatsAppConfig.objects.get_or_create(pk=1)
+    if created:cfg.refresh_from_db()
     error=None;status='Não configurado';groups=[]
     try:
         status=session_info().get('status','Desconhecido')
@@ -72,7 +75,18 @@ def settings(request):
             except Exception:error='Não foi possível desconectar a sessão.'
         elif form.is_valid():
             cfg=form.save(commit=False);cfg.chat_id=form.cleaned_data['chat_id'];cfg.recipient_label=', '.join(dict(groups).get(c,c) for c in cfg.chat_ids)[:150];cfg.save();return redirect('/whatsapp/')
-    response=render(request,'whatsapp.html',{'form':form,'cfg':cfg,'status':status,'error':error,'deliveries':WhatsAppDelivery.objects.order_by('-day')[:30]})
+    local=timezone.now().astimezone(ZONE);day=local.date()
+    entries=report(day)['totals']['entries']
+    included=list(Camera.objects.filter(enabled=True,include_in_total=True))
+    recent=sum(bool(c.last_seen and (timezone.now()-c.last_seen).total_seconds()<=max(180,c.expected_interval*3)) for c in included)
+    pending_imports=HistoryImport.objects.filter(camera__ip__in=[c.ip for c in included],start__lte=day,end__gte=day).exclude(status__in=['completed','archived']).exists()
+    schedule=[]
+    for value in daily_times(cfg,day):
+        slot=time.fromisoformat(value)
+        schedule.append({'time':value,'final':slot==final_time(day),'past':slot<local.time().replace(tzinfo=None)})
+    future=[item for item in schedule if not item['past']]
+    next_send=future[0]['time']+' hoje' if future else daily_times(cfg,day+timedelta(days=1))[0]+' amanhã'
+    response=render(request,'whatsapp.html',{'form':form,'cfg':cfg,'status':status,'error':error,'deliveries':WhatsAppDelivery.objects.order_by('-day','-scheduled_time','-id')[:30],'preview':flow_message(local,entries),'preview_entries':entries,'schedule':schedule,'next_send':next_send,'recipient_count':len(recipients(cfg)),'recent':recent,'included_count':len(included),'pending_imports':pending_imports,'last_verified':AuditLog.objects.filter(action='whatsapp_verified').order_by('-at').first()})
     response['Cache-Control']='no-store';return response
 @login_required
 @user_passes_test(lambda u:u.is_superuser)

@@ -8,7 +8,7 @@ from django.db.models.functions import TruncHour,TruncDate,TruncMonth
 from django.http import HttpResponse,JsonResponse
 from django.shortcuts import render,redirect
 from django.utils import timezone
-from .models import Camera,Reading,PublicLink,AuditLog
+from .models import Camera,Reading,PublicLink,AuditLog,HistoryImport
 from .services import ZONE
 
 def protected(response,admin_form=False):
@@ -95,7 +95,14 @@ def analytics(link,mode,reference):
         a=row['entries'];b=row['exits'];totals['entries']+=a;totals['exits']+=b
         points.append({'label':label,'entries':a,'exits':b,'passages':a+b})
     totals['balance']=totals['entries']-totals['exits'];totals['passages']=totals['entries']+totals['exits']
-    return {'start':str(start),'end':str(end),'totals':totals,'points':points,'has_data':bool(grouped),'devices':list(cameras.values_list('name',flat=True))}
+    names=list(cameras.values_list('name',flat=True))
+    present=set(readings.values_list('camera_id',flat=True).distinct())
+    missing=list(cameras.exclude(pk__in=present).values_list('name',flat=True))
+    pending=HistoryImport.objects.filter(camera__in=cameras,start__lte=end,end__gte=start).exclude(status__in=['completed','archived']).exists()
+    warnings=[]
+    if missing:warnings.append('Sem registros no período: '+', '.join(missing))
+    if pending:warnings.append('Há importações não concluídas neste período; os totais podem mudar.')
+    return {'start':str(start),'end':str(end),'totals':totals,'points':points,'has_data':bool(grouped),'devices':names,'warnings':warnings,'pending_imports':pending}
 
 def public(request,token,as_json=False):
     if len(token)>100:return protected(HttpResponse('Link indisponível.',status=404))

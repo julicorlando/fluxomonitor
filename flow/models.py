@@ -191,3 +191,9 @@ class PublicLink(models.Model):
     revoked_at=models.DateTimeField(null=True,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
     actor=models.CharField(max_length=150)
+
+class AccessMap(models.Model):
+    positions=models.JSONField(default=dict)
+    image=models.BinaryField(null=True,blank=True)
+    image_type=models.CharField(max_length=30,blank=True)
+    updated_at=models.DateTimeField(auto_now=True)

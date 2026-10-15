@@ -200,3 +200,13 @@ Superadmin pode limpar somente importações em /imports/: tarefas saem da lista
 Em Administração → Links públicos temporários (/public-links/), superadmin define duração de 1 a 365 dias e prorrogação do mesmo link, período de dados autorizado e dispositivo ou todos os incluídos. Link aleatório com hash armazenado, prorrogável/expirável/revogável, somente leitura, sem IPs/credenciais ou navegação administrativa. O endereço completo é mostrado apenas na criação. Consulta BI permite comparar dois dias, meses ou anos dentro do intervalo autorizado, com cartões, variação percentual (sem percentual sobre base zero), gráficos, tabela e impressão/PDF pelo navegador. Meses/anos atuais explicitam período parcial até hoje; ausência de registros não certifica zero. Comparação consulta eventos delta normalizados; fontes cumulativas bloqueiam a visualização em vez de somar valores incorretamente. JSON com mesmos filtros disponível em /public/TOKEN/data/. Respostas privadas/no-store, noindex e no-referrer. Conhecer o link concede acesso aos dados liberados: o superadmin deve compartilhá-lo somente com destinatários autorizados; expiração/revogação não recolhe cópias já vistas ou impressas.
 
 A ação superadmin Limpar contagens de hoje e reimportar modifica apenas o banco do GesTi, com cópia restaurável. Não apaga, zera ou configura o equipamento; a integração usa somente PassengerFlowDataGet. Uma nova tarefa de hoje por equipamento físico tem prioridade sobre varreduras antigas. Datas dos demais dias e cursores da coleta ao vivo são preservados.
+
+
+## Experiência GesTi
+
+- Painel responsivo com períodos dia/semana/mês/ano, gráficos interativos, detalhe por intervalo, filtros de dispositivo/grupo e exportação CSV. Períodos abertos comparam tempo transcorrido equivalente; variações dos registros não certificam cobertura.
+- Mapa em `/map/`: operadores posicionam acessos e enviam planta JPEG/PNG/WebP até 2 MB. A imagem é validada, redimensionada, sem metadados e armazenada no banco, com consulta protegida pelo login. Réplicas são pontos lógicos.
+- Importações: Pausar preserva o cursor; Retomar continua do mesmo ponto. Reiniciar reexamina com deduplicação. Uma tarefa ativa por equipamento físico.
+- WhatsApp: prévia não verificada, agenda calculada e histórico distinguindo aceite do gateway de entrega. Nenhuma mensagem é enviada apenas ao abrir a página.
+- PWA: manifest, ícones e experiência de instalação; service worker exibe aviso offline sem armazenar páginas autenticadas, dados da API ou links públicos. No iPhone, Safari → Compartilhar → Adicionar à Tela de Início.
+- Aplicação de migrações e arquivos estáticos permanece automática no entrypoint do deploy.

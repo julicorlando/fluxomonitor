@@ -94,7 +94,7 @@ class HistoryTests(TestCase):
         job.refresh_from_db();cursor.refresh_from_db()
         self.assertEqual(job.status,'pending');self.assertFalse(job.initialized)
         self.assertEqual(job.scanned,0);self.assertEqual(job.error,'');self.assertEqual(cursor.offset,500)
-        self.assertContains(self.client.get('/imports/'),'Parar importação')
+        self.assertContains(self.client.get('/imports/'),'Pausar')
 
     def test_retry_does_not_create_concurrent_jobs_or_allow_non_staff(self):
         failed=HistoryImport.objects.create(camera=self.camera,start=self.day,end=self.day,status='failed')

@@ -52,6 +52,23 @@ def imports(request):
                 logging.error('Ação de importação bloqueada: %s',type(exc).__name__)
                 messages.error(request,'Operação não concluída: '+type(exc).__name__+'. A transação não foi aplicada.')
             return redirect('/imports/')
+        if request.POST.get('action') in ('pause','resume'):
+            with transaction.atomic():
+                candidate=HistoryImport.objects.filter(pk=request.POST.get('job_id')).first()
+                if candidate:
+                    Camera.objects.select_for_update().get(pk=candidate.camera_id)
+                    job=HistoryImport.objects.select_for_update().get(pk=candidate.pk)
+                    action=request.POST['action']
+                    if action=='pause' and job.status in ('pending','running'):
+                        job.status='paused';job.save(update_fields=['status','updated_at'])
+                    elif action=='resume' and job.status=='paused':
+                        if HistoryImport.objects.filter(camera_id=job.camera_id,status__in=['pending','running']).exclude(pk=job.pk).exists():
+                            messages.error(request,'Há outra tarefa ativa neste equipamento. Aguarde ou pause essa tarefa antes de retomar.')
+                            return redirect('/imports/')
+                        job.status='pending';job.save(update_fields=['status','updated_at'])
+                    else:return redirect('/imports/')
+                    AuditLog.objects.create(actor=request.user.get_username(),action='history_'+action,object_type='HistoryImport',object_id=str(job.pk),changes={'offset':job.offset})
+            return redirect('/imports/')
         if request.POST.get('action')=='retry':
             with transaction.atomic():
                 candidate=HistoryImport.objects.filter(pk=request.POST.get('job_id')).first()
@@ -78,7 +95,7 @@ def imports(request):
         if form.is_valid():
             with transaction.atomic():
                 camera=Camera.objects.select_for_update().get(pk=form.cleaned_data['camera'].pk)
-                if HistoryImport.objects.filter(camera=camera,status__in=['pending','running']).exists():form.add_error(None,'Este dispositivo já tem uma importação em andamento.')
+                if HistoryImport.objects.filter(camera=camera,status__in=['pending','running','paused']).exists():form.add_error(None,'Este dispositivo já tem uma importação em andamento.')
                 else:
                     job=form.save()
                     AuditLog.objects.create(actor=request.user.get_username(),action='history_import',object_type='HistoryImport',object_id=str(job.pk),changes={'camera':camera.pk,'start':str(job.start),'end':str(job.end)})
@@ -91,6 +108,6 @@ def imports(request):
 @user_passes_test(lambda u:u.is_staff)
 def progress(request):
     jobs=HistoryImport.objects.exclude(status='archived').order_by('-id')[:50]
-    response=JsonResponse({'jobs':[{'id':j.pk,'status':j.status,'progress':j.progress,'scanned':j.scanned,'imported':j.imported,'error':j.error} for j in jobs]})
+    response=JsonResponse({'jobs':[{'id':j.pk,'status':j.status,'progress':j.progress,'scanned':j.scanned,'imported':j.imported,'error':j.error,'updated_at':j.updated_at.isoformat(),'last_timestamp':j.last_timestamp.isoformat() if j.last_timestamp else None,'earliest_available':j.earliest_available.isoformat() if j.earliest_available else None} for j in jobs]})
     response['Cache-Control']='no-store'
     return response

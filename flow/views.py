@@ -37,7 +37,7 @@ def live(request):
     except ValueError:return JsonResponse({'error':'Filtro inválido'},status=400)
     scoped=request.api_key.camera_id if request.api_key else None
     if scoped and requested and scoped!=requested:return JsonResponse({'error':'Sem permissão'},status=403)
-    data=report(day,scoped or requested,group)
+    data=report(day,scoped or requested,group,until=timezone.now() if day==timezone.now().astimezone(ZONE).date() else None)
     data['devices']=data['cameras']
     return JsonResponse(data)
 @access('read')

@@ -1,0 +1,6 @@
+<p><small>O status de vídeo é informado pelo coletor a cada 10 segundos. Sem atualização por 45 segundos, o canal deixa de aparecer conectado. Receber vídeo não garante leitura da placa.</small></p>
+<script>
+(()=>{let busy=false;const paint=(attribute,id,text,state)=>{document.querySelectorAll('['+attribute+'="'+id+'"]').forEach(el=>{el.textContent=text;el.style.color=state==='streaming'?'#37b997':state==='pending'||state==='disabled'?'inherit':'#dd9a39';});};
+async function refresh(){if(busy||document.visibilityState!=='visible')return;busy=true;try{const response=await fetch('/plates/nvrs/status/',{cache:'no-store',headers:{Accept:'application/json'}});if(!response.ok)throw Error();const data=await response.json();for(const nvr of data.recorders){paint('data-nvr-video',nvr.id,nvr.label,nvr.state);paint('data-nvr-collector',nvr.id,nvr.collector+' · Último contato: '+nvr.last_seen,'pending');for(const channel of nvr.channels)paint('data-channel-video',channel.id,channel.label+' · Último quadro: '+channel.last_frame_at+' · Verificado: '+channel.checked_at,channel.state);}}catch(e){document.querySelectorAll('[data-nvr-video],[data-channel-video]').forEach(el=>{el.textContent='Não foi possível atualizar o status agora';el.style.color='#dd9a39';});}finally{busy=false;}}
+refresh();setInterval(refresh,10000);})();
+</script>

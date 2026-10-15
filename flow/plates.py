@@ -96,17 +96,8 @@ def cameras(request):
 @csrf_exempt
 @require_POST
 def ingest(request):
-    token = request.headers.get('Authorization','').removeprefix('Bearer ').strip()
-    camera = PlateCamera.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest(), enabled=True).first() if token else None
-    if not camera:
-        recorder = PlateRecorder.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest(), enabled=True).first() if token else None
-        if recorder:
-            try: channel = int(request.POST.get('channel',''))
-            except (ValueError,TypeError): return JsonResponse({'error':'Canal inválido'},status=400)
-            camera = PlateCamera.objects.filter(recorder=recorder,channel=channel,enabled=True).first()
-    if not camera: return JsonResponse({'error':'Token inválido ou canal desativado'}, status=401)
-    if camera.recorder_id and not camera.recorder.enabled:
-        return JsonResponse({'error':'NVR desativado'},status=401)
+    camera = camera_access(request)
+    if isinstance(camera, JsonResponse): return camera
     try:
         plate = normalize(request.POST.get('plate',''))
         event = uuid.UUID(request.POST.get('event_id',''))
@@ -126,3 +117,34 @@ def ingest(request):
         return JsonResponse({'id':obj.pk, 'created':created}, status=201 if created else 200)
     except (ValueError, TypeError, UnidentifiedImageError, OSError, Image.DecompressionBombError):
         return JsonResponse({'error':'Envie placa brasileira válida, UUID, data ISO com fuso, confiança 0–1 e imagem até 500 KB.'}, status=400)
+
+
+def camera_access(request):
+    token = request.headers.get('Authorization','').removeprefix('Bearer ').strip()
+    camera = PlateCamera.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest(), enabled=True).first() if token else None
+    if not camera:
+        recorder = PlateRecorder.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest(), enabled=True).first() if token else None
+        if recorder:
+            try: channel = int(request.POST.get('channel',''))
+            except (ValueError,TypeError): return JsonResponse({'error':'Canal inválido'},status=400)
+            camera = PlateCamera.objects.filter(recorder=recorder,channel=channel,enabled=True).first()
+    if not camera: return JsonResponse({'error':'Token inválido ou canal desativado'}, status=401)
+    if camera.recorder_id and not camera.recorder.enabled:
+        return JsonResponse({'error':'NVR desativado'},status=401)
+    return camera
+
+@csrf_exempt
+@require_POST
+def heartbeat(request):
+    camera = camera_access(request)
+    if isinstance(camera, JsonResponse): return camera
+    try:
+        age_text=request.POST.get('frame_age','')
+        age=float(age_text) if age_text else None
+        if age is not None and (not math.isfinite(age) or not 0<=age<=86400): raise ValueError()
+    except (ValueError,TypeError): return JsonResponse({'error':'Idade do quadro inválida'},status=400)
+    now=timezone.now()
+    values={'video_checked_at':now,'video_status':'streaming' if age is not None and age<=3 else 'unavailable'}
+    if age is not None: values['last_frame_at']=now-timedelta(seconds=age)
+    PlateCamera.objects.filter(pk=camera.pk).update(**values)
+    return JsonResponse({'status':values['video_status']})

@@ -203,6 +203,10 @@ class PlateRecorder(models.Model):
     def __str__(self): return self.name
 
 class PlateCamera(models.Model):
+    video_status = models.CharField(max_length=20, default='pending')
+    video_checked_at = models.DateTimeField(null=True, blank=True)
+    last_frame_at = models.DateTimeField(null=True, blank=True)
+
     recorder = models.ForeignKey(PlateRecorder, null=True, blank=True, on_delete=models.PROTECT)
     channel = models.PositiveSmallIntegerField(null=True, blank=True)
     roi = models.JSONField(default=list, blank=True)

@@ -40,3 +40,24 @@ Esta é uma implementação piloto, sem taxa de acerto medida. Teste o vídeo or
 ## API
 
 `POST /api/v1/plates/ingest/` multipart com `Authorization: Bearer <token>`: `event_id` UUID persistente por passagem, `plate`, `captured_at` ISO 8601 com fuso, `confidence` entre 0 e 1, `image` JPEG/PNG até 500 KB e 8 milhões de pixels. Respostas: 201 novo, 200 reenvio, 400 inválido, 401 sem autorização. O token determina a câmera; o cliente não escolhe outra câmera no payload.
+
+## Intelbras NVD 3116 — seleção pelo painel
+
+1. Acesse **Placas > NVRs e canais** como superadmin. Cadastre nome, IP do NVR e porta RTSP (normalmente 554).
+2. Copie o token exclusivo do NVR para o servidor local. Para substituir um token perdido, abra **Editar conexão > Substituir token do coletor**; o anterior será invalidado.
+3. Abra **Selecionar canais**, marque os canais de 1 a 16, identifique cada cancela e ajuste a ROI individual. A tela lista posições de canal para configuração manual: não consulta automaticamente o inventário do gravador nem afirma que o canal está conectado. O vídeo principal é o padrão.
+4. No servidor que alcança o NVR, instale os requisitos do coletor e Tesseract conforme acima e configure, em arquivo de ambiente privado, as variáveis:
+
+```text
+PLATES_BASE_URL=https://fluxo.axionwebdigital.com.br
+PLATES_NVR_TOKEN=<token do NVR>
+PLATES_NVR_USERNAME=<usuário do gravador com permissão de visualização>
+PLATES_NVR_PASSWORD=<senha do gravador>
+PLATES_QUEUE_DIR=/var/lib/fluxo-plates/queues
+```
+
+Execute `python collector/nvr.py` com as variáveis exportadas. Uma instância deste supervisor atende um NVR; execute outra instância com configuração própria para cada gravador adicional. O supervisor consulta a seleção a cada 15 segundos e inicia um processo por canal marcado. Alterações de IP, porta, vídeo ou ROI reiniciam somente os processos afetados. Desmarcar um canal encerra seu processo; desativar o NVR encerra todos. O servidor rejeita imediatamente ingestão para NVR/canal desativado. Após 90 segundos sem obter configuração atualizada, o supervisor pausa os processos. Filas pendentes são preservadas e só retomam quando o canal volta a ser selecionado.
+
+O endereço é montado no coletor: `rtsp://USUARIO:SENHA@IP:PORTA/cam/realmonitor?channel=N&subtype=0`. Caracteres especiais em usuário/senha são codificados. Não é necessário obter o IP individual das câmeras conectadas ao NVR. A integração faz leitura de vídeo ao vivo e não altera as gravações. IP e canal corretos, permissões RTSP e codec decodificável devem ser testados no equipamento real. Comece com um canal para medir consumo de CPU, carga no NVR e taxa de acerto. A tela de último contato mostra consulta de configuração pelo supervisor; não comprova abertura do vídeo. Última captura mostra ingestão concluída.
+
+A API `GET /api/v1/plates/collector-config/` aceita somente o token daquele NVR e retorna seus canais selecionados, sem usuário ou senha do equipamento. No envio multipart de capturas com token de NVR, acrescente `channel` (1–16). Tokens individuais de câmeras existentes continuam funcionando, respeitando a desativação do gravador associado. O cadastro de contagem de pessoas é independente.

@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_GET
-from .models import PlateCamera, PlateCapture, AuditLog
+from .models import PlateCamera, PlateCapture, AuditLog, PlateRecorder
 
 PLATE = re.compile(r'(?:[A-Z]{3}[0-9]{4}|[A-Z]{3}[0-9][A-Z][0-9]{2})')
 def normalize(value):
@@ -98,7 +98,15 @@ def cameras(request):
 def ingest(request):
     token = request.headers.get('Authorization','').removeprefix('Bearer ').strip()
     camera = PlateCamera.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest(), enabled=True).first() if token else None
-    if not camera: return JsonResponse({'error':'Token inválido'}, status=401)
+    if not camera:
+        recorder = PlateRecorder.objects.filter(token_digest=hashlib.sha256(token.encode()).hexdigest(), enabled=True).first() if token else None
+        if recorder:
+            try: channel = int(request.POST.get('channel',''))
+            except (ValueError,TypeError): return JsonResponse({'error':'Canal inválido'},status=400)
+            camera = PlateCamera.objects.filter(recorder=recorder,channel=channel,enabled=True).first()
+    if not camera: return JsonResponse({'error':'Token inválido ou canal desativado'}, status=401)
+    if camera.recorder_id and not camera.recorder.enabled:
+        return JsonResponse({'error':'NVR desativado'},status=401)
     try:
         plate = normalize(request.POST.get('plate',''))
         event = uuid.UUID(request.POST.get('event_id',''))

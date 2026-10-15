@@ -101,7 +101,7 @@ def main():
             if pending:
                 event,plate,captured,confidence,image=pending
                 try:
-                    response=requests.post(url+'/api/v1/plates/ingest/', headers={'Authorization':'Bearer '+token}, data={'event_id':event,'plate':plate,'captured_at':captured,'confidence':confidence}, files={'image':('capture.jpg',image,'image/jpeg')}, timeout=(5,15), allow_redirects=False)
+                    response=requests.post(url+'/api/v1/plates/ingest/', headers={'Authorization':'Bearer '+token}, data={'event_id':event,'plate':plate,'captured_at':captured,'confidence':confidence,'channel':os.environ.get('PLATES_CHANNEL','')}, files={'image':('capture.jpg',image,'image/jpeg')}, timeout=(5,15), allow_redirects=False)
                     if response.status_code in (200,201):
                         db.execute('DELETE FROM queue WHERE event=?',(event,)); db.commit()
                     else:

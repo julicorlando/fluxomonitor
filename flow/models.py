@@ -193,12 +193,31 @@ class PublicLink(models.Model):
     actor=models.CharField(max_length=150)
 
 
+class PlateRecorder(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    host = models.GenericIPAddressField(verbose_name='IP do NVR')
+    port = models.PositiveIntegerField(default=554)
+    enabled = models.BooleanField(default=True)
+    token_digest = models.CharField(max_length=64, unique=True)
+    last_seen = models.DateTimeField(null=True, blank=True)
+    def __str__(self): return self.name
+
 class PlateCamera(models.Model):
+    recorder = models.ForeignKey(PlateRecorder, null=True, blank=True, on_delete=models.PROTECT)
+    channel = models.PositiveSmallIntegerField(null=True, blank=True)
+    roi = models.JSONField(default=list, blank=True)
+    stream = models.PositiveSmallIntegerField(default=0)
+
     name = models.CharField(max_length=100, unique=True)
     enabled = models.BooleanField(default=True)
     token_digest = models.CharField(max_length=64, unique=True)
     last_seen = models.DateTimeField(null=True, blank=True)
     def __str__(self): return self.name
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['recorder','channel'], name='unique_plate_recorder_channel'),
+            models.CheckConstraint(condition=(models.Q(recorder__isnull=True,channel__isnull=True) | models.Q(recorder__isnull=False,channel__isnull=False,channel__gte=1,channel__lte=16)), name='plate_channel_valid'),
+        ]
 
 class PlateCapture(models.Model):
     camera = models.ForeignKey(PlateCamera, on_delete=models.PROTECT)

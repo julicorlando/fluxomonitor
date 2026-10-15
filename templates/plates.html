@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block content %}
 <h1>Placas registradas</h1><p>Histórico de veículos nas cancelas · atualização automática a cada 15 segundos</p>
-{% if user.is_superuser %}<a class="button" href="/plates/cameras/">Configurar câmeras</a>{% endif %}
+{% if user.is_superuser %}<a class="button" href="/plates/cameras/">Configurar câmeras</a> <a class="button" href="/plates/nvrs/">NVRs e canais</a>{% endif %}
 <form class="box" method="get">{{ form.as_p }}<button>Filtrar</button> <a href="/plates/">Limpar filtros</a></form>
 <p>{{ page.paginator.count }} registros encontrados</p>
 {% for c in cameras %}<small>{{ c.name }} · {% if not c.enabled %}Desativada{% elif c.last_seen %}Último envio {{ c.last_seen }}{% else %}Aguardando primeira captura{% endif %}</small><br>{% endfor %}

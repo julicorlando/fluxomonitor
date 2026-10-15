@@ -161,3 +161,41 @@ class HistoryPriorityTests(TestCase):
         response=self.client.post('/imports/',{'action':'reimport_today'},follow=True)
         self.assertContains(response,'Bloqueio de fonte')
         self.assertFalse(HistoryImport.objects.exists())
+
+class ParallelHistoryTests(TestCase):
+    @patch.dict(os.environ,{'PFC_PULL_IPS':'192.168.1.235,192.168.1.236,192.168.1.237,192.168.1.237'})
+    @patch('flow.management.commands.import_pfc_history.import_batch')
+    def test_maintenance_pass_processes_each_physical_ip_once(self,run):
+        from django.core.management import call_command
+        day=timezone.now().astimezone(ZONE).date();jobs=[]
+        for ip in ['192.168.1.235','192.168.1.236','192.168.1.237']:
+            camera=Camera.objects.create(name=ip,ip=ip)
+            jobs.append(HistoryImport.objects.create(camera=camera,start=day,end=day))
+            HistoryImport.objects.create(camera=camera,start=day-timedelta(days=2),end=day-timedelta(days=1))
+        call_command('import_pfc_history',once=True)
+        self.assertEqual([c.args[0] for c in run.call_args_list],[j.pk for j in jobs])
+
+    @patch('flow.management.commands.import_pfc_history.connections.close_all')
+    @patch('flow.management.commands.import_pfc_history.close_old_connections')
+    @patch('flow.management.commands.import_pfc_history.next_job')
+    @patch('flow.management.commands.import_pfc_history.import_batch')
+    def test_slow_device_does_not_hold_other_device(self,run,select,close_old,close_all):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from types import SimpleNamespace
+        from flow.management.commands.import_pfc_history import run_batch
+        entered=Event();release=Event();fast_finished=Event()
+        select.side_effect=lambda ip:SimpleNamespace(pk=ip)
+        def batch(ip):
+            if ip=='slow':entered.set();self.assertTrue(release.wait(3))
+            else:fast_finished.set()
+        run.side_effect=batch
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            slow=pool.submit(run_batch,'slow')
+            try:
+                self.assertTrue(entered.wait(2))
+                fast=pool.submit(run_batch,'fast')
+                self.assertTrue(fast_finished.wait(2));self.assertFalse(slow.done())
+            finally:release.set()
+            slow.result();fast.result()
+        self.assertEqual(close_all.call_count,2)

@@ -1,6 +1,6 @@
 from datetime import datetime,time,timedelta
 from zoneinfo import ZoneInfo
-from django.db import transaction
+from django.db import transaction,connection
 from django.db.models import Min
 from django.utils import timezone
 from .models import Camera,Reading,DailyReport
@@ -43,6 +43,14 @@ def report(day,device_id=None,group_id=None):
     totals={k:sum(r[k] for r in rows if device_id or r["include_in_total"]) for k in ('entries','exits','balance','passages')}
     return {'date':str(day),'timezone':str(ZONE),'initial_balance':0,'cameras':rows,'totals':totals,'intervals':chart,'peak_15min':max(bins,key=bins.get) if bins and max(bins.values()) else None,'peak_hour':max(hours,key=hours.get) if max(hours.values()) else None,'warnings':sorted(set(warnings)),'peak_basis':'entradas + saídas; horário da leitura','updated_at':timezone.now().isoformat()}
 def close_day(day):
-    data=report(day)
-    DailyReport.objects.update_or_create(day=day,defaults={'data':data})
-    return data
+    with transaction.atomic():
+        # Different cameras can import the same day concurrently. Serialize
+        # aggregate reads/writes so the last snapshot includes committed peers.
+        if connection.vendor=='postgresql':
+            with connection.cursor() as cursor:
+                # One aggregate lock avoids lock-order inversions for batches
+                # spanning several dates. Network collection stays parallel.
+                cursor.execute('SELECT pg_advisory_xact_lock(%s, %s)',[77816,0])
+        data=report(day)
+        DailyReport.objects.update_or_create(day=day,defaults={'data':data})
+        return data

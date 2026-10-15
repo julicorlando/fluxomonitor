@@ -84,6 +84,21 @@ class PublicLinkTests(TestCase):
         from .models import AuditLog
         self.assertNotIn(created.digest,str(AuditLog.objects.latest('id').changes))
         self.client.post('/public-links/',{'action':'revoke','link_id':created.pk});created.refresh_from_db();self.assertIsNotNone(created.revoked_at)
+    def test_https_admin_form_keeps_csrf_provenance_and_public_url_private(self):
+        from django.test import Client,override_settings
+        with override_settings(ALLOWED_HOSTS=['fluxo.axionwebdigital.com.br']):
+            client=Client(enforce_csrf_checks=True);client.force_login(self.user)
+            host={'HTTP_HOST':'fluxo.axionwebdigital.com.br'}
+            response=client.get('/public-links/',secure=True,**host)
+            self.assertEqual(response['Referrer-Policy'],'same-origin')
+            token=client.cookies['csrftoken'].value
+            body={'csrfmiddlewaretoken':token,'label':'Consulta segura','duration_days':2,'start':'2025-05-10','end':'2025-05-10'}
+            self.assertEqual(client.post('/public-links/',body,secure=True,HTTP_ORIGIN='https://evil.example',**host).status_code,403)
+            self.assertEqual(client.post('/public-links/',body,secure=True,**host).status_code,403)
+            response=client.post('/public-links/',body,secure=True,HTTP_REFERER='https://fluxo.axionwebdigital.com.br/public-links/',**host)
+            self.assertContains(response,'Link público gerado')
+            self.assertEqual(client.get('/public/testtoken/',secure=True,**host)['Referrer-Policy'],'no-referrer')
+
     def test_extend_same_link_expired_allowed_revoked_blocked(self):
         self.client.force_login(self.user)
         expiry=self.link.expires_at;digest=self.link.digest

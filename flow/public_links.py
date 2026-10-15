@@ -11,9 +11,11 @@ from django.utils import timezone
 from .models import Camera,Reading,PublicLink,AuditLog
 from .services import ZONE
 
-def protected(response):
+def protected(response,admin_form=False):
     response['Cache-Control']='private, no-store, max-age=0'
-    response['Referrer-Policy']='no-referrer'
+    # HTTPS form submissions need same-origin provenance for Django CSRF.
+    # Public token URLs must still never be sent as referrers.
+    response['Referrer-Policy']='same-origin' if admin_form else 'no-referrer'
     response['X-Robots-Tag']='noindex, nofollow, noarchive'
     response['Content-Security-Policy']="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"
     return response
@@ -62,7 +64,7 @@ def manage(request):
             link.expires_at=timezone.now()+timedelta(days=form.cleaned_data['duration_days']);link.save()
             url=request.build_absolute_uri('/public/'+token+'/')
             AuditLog.objects.create(actor=link.actor,action='public_link_create',object_type='PublicLink',object_id=str(link.pk),changes={'start':str(link.start),'end':str(link.end),'expires_at':link.expires_at.isoformat(),'camera_id':link.camera_id})
-    return protected(render(request,'public_links.html',{'form':form,'public_url':url,'extension_error':extension_error,'links':PublicLink.objects.select_related('camera').order_by('-id')[:100]}))
+    return protected(render(request,'public_links.html',{'form':form,'public_url':url,'extension_error':extension_error,'links':PublicLink.objects.select_related('camera').order_by('-id')[:100]}),admin_form=True)
 
 class CompareForm(forms.Form):
     mode=forms.ChoiceField(label='Comparar por',choices=[('day','Dia a dia'),('month','Mês a mês'),('year','Ano a ano')])

@@ -21,6 +21,7 @@ services:
     ports:
       - "8086:8000"
     environment: &env
+      PFC_SERVICE_SECRET: ${PFC_SERVICE_SECRET:?Configure PFC_SERVICE_SECRET}
       PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}

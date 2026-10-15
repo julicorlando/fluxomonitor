@@ -11,6 +11,8 @@ from flow.history_views import ImportForm
 
 class HistoryTests(TestCase):
     def setUp(self):
+        self.end_patch=patch('flow.history_pull.find_end',return_value=1000000)
+        self.end_patch.start();self.addCleanup(self.end_patch.stop)
         self.camera=Camera.objects.create(ip='192.168.1.235',name='Entrada')
         self.day=timezone.now().astimezone(ZONE).date()-timedelta(days=3)
     def event(self,i,day,kind):
@@ -106,3 +108,37 @@ class HistoryTests(TestCase):
         self.client.force_login(viewer)
         self.client.post('/imports/',{'action':'retry','job_id':failed.pk})
         failed.refresh_from_db();self.assertEqual(failed.status,'failed')
+
+    def test_progress_bounds_and_endpoint_access(self):
+        job=HistoryImport.objects.create(camera=self.camera,start=self.day,end=self.day,first_offset=100,target_offset=300,offset=200)
+        self.assertEqual(job.progress,50)
+        job.offset=400;self.assertEqual(job.progress,99.9)
+        job.status='completed';self.assertEqual(job.progress,100)
+        job.save()
+        self.assertEqual(self.client.get('/imports/progress/').status_code,302)
+        user=User.objects.create_user('progress-staff',is_staff=True)
+        self.client.force_login(user)
+        response=self.client.get('/imports/progress/')
+        self.assertEqual(response.json()['jobs'][0]['progress'],100)
+        self.assertEqual(response['Cache-Control'],'no-store')
+        self.assertContains(self.client.get('/imports/'),'aria-label="Progresso da importação"')
+        user.is_staff=False;user.save()
+        self.assertEqual(self.client.get('/imports/progress/').status_code,302)
+
+    @patch('flow.history_pull.fetch')
+    def test_fixed_limit_completes_even_when_new_events_arrive(self,fetch):
+        fetch.return_value=[self.event(100,self.day,0),self.event(101,self.day,1)]
+        job=HistoryImport.objects.create(camera=self.camera,start=self.day,end=self.day,initialized=True,offset=100,first_offset=100,target_offset=101)
+        import_batch(job.pk);job.refresh_from_db()
+        self.assertEqual(job.status,'completed');self.assertEqual(job.progress,100)
+        self.assertEqual(job.scanned,1);self.assertEqual(job.imported,1)
+
+class HistoryLimitTests(TestCase):
+    @patch('flow.history_pull.fetch')
+    def test_find_end_handles_absolute_id_gaps_and_offset(self,fetch):
+        from flow.history_pull import find_end
+        ids=[100,103,110]
+        fetch.side_effect=lambda camera,index,quantity:[{'idIndex':i} for i in ids if i>=index][:quantity]
+        self.assertEqual(find_end(None,100),111)
+        fetch.side_effect=lambda camera,index,quantity:[{}] if index<3 else []
+        self.assertEqual(find_end(None,0),3)

@@ -5,11 +5,25 @@ from .models import Camera,HistoryImport,Reading,RawDelivery,NativeWindow
 from .pfc_pull import fetch,ProtocolError
 from .services import ZONE,close_day
 
+def find_end(camera,base):
+    """Find an exclusive index bound without assuming timestamp order."""
+    low,high=base,base+1
+    for _ in range(63):
+        if not fetch(camera,high,1):break
+        low,high=high,base+2*(high-base)
+    else:raise ProtocolError('Não foi possível estimar o limite do histórico')
+    while low+1<high:
+        mid=(low+high)//2
+        if fetch(camera,mid,1):low=mid
+        else:high=mid
+    return high
+
 def import_batch(job_id):
     with transaction.atomic():
+        camera_id=HistoryImport.objects.values_list('camera_id',flat=True).get(pk=job_id)
+        camera=Camera.objects.select_for_update().get(pk=camera_id)
         job=HistoryImport.objects.select_for_update().get(pk=job_id)
         if job.status not in ('pending','running'):return
-        camera=Camera.objects.select_for_update().get(pk=job.camera_id)
         if not camera.enabled:raise ProtocolError('Dispositivo desativado')
         if NativeWindow.objects.filter(camera=camera).exists() or Reading.objects.filter(camera=camera).exclude(event_id__startswith='pfc-event:').exists():raise ProtocolError('Outra fonte de contagem existente; não misturar fontes')
         if not job.initialized:
@@ -31,7 +45,12 @@ def import_batch(job_id):
                     probe=fetch(camera,first[0]['idIndex'],1)
                     if not probe or probe[0]!=first[0]:raise ProtocolError('Paginação histórica desconhecida')
             job.initialized=True
+        if job.target_offset is None:
+            job.first_offset=job.offset
+            job.target_offset=find_end(camera,job.offset)
         events=fetch(camera,job.offset,100)
+        if job.index_mode=='id':events=[e for e in events if e['idIndex']<job.target_offset]
+        else:events=events[:max(0,job.target_offset-job.offset)]
         start=datetime.combine(job.start,time.min,tzinfo=ZONE)
         end=datetime.combine(job.end+timedelta(days=1),time.min,tzinfo=ZONE)
         if events and job.index_mode=='id' and events[0]['idIndex']<job.offset:raise ProtocolError('Resposta anterior ao cursor histórico')
@@ -52,6 +71,7 @@ def import_batch(job_id):
         if events:
             job.offset=events[-1]['idIndex']+1 if job.index_mode=='id' else job.offset+len(events)
         else:job.status='completed'
+        if job.offset>=job.target_offset:job.status='completed'
         job.error='';job.save()
         for day in days:
             if day<timezone.now().astimezone(ZONE).date():close_day(day)

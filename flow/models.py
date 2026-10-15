@@ -150,6 +150,8 @@ class PullCursor(models.Model):
     last_error=models.CharField(max_length=250,blank=True)
 
 class HistoryImport(models.Model):
+    first_offset=models.BigIntegerField(null=True,blank=True)
+    target_offset=models.BigIntegerField(null=True,blank=True)
     camera=models.ForeignKey(Camera,on_delete=models.PROTECT)
     start=models.DateField()
     end=models.DateField()
@@ -164,3 +166,28 @@ class HistoryImport(models.Model):
     error=models.CharField(max_length=250,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
     updated_at=models.DateTimeField(auto_now=True)
+    @property
+    def progress(self):
+        if self.status=='completed':return 100
+        if self.first_offset is None or self.target_offset is None:return None
+        span=self.target_offset-self.first_offset
+        if span<=0:return 0
+        return round(max(0,min(99.9,100*(self.offset-self.first_offset)/span)),1)
+
+class ImportCleanup(models.Model):
+    created_at=models.DateTimeField(auto_now_add=True)
+    actor=models.CharField(max_length=150)
+    restored_at=models.DateTimeField(null=True,blank=True)
+    affected_days=models.JSONField(default=list)
+    data=models.JSONField(default=dict)
+
+class PublicLink(models.Model):
+    label=models.CharField(max_length=100)
+    digest=models.CharField(max_length=64,unique=True)
+    camera=models.ForeignKey(Camera,null=True,blank=True,on_delete=models.PROTECT)
+    start=models.DateField()
+    end=models.DateField()
+    expires_at=models.DateTimeField()
+    revoked_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    actor=models.CharField(max_length=150)

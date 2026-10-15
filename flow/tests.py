@@ -151,6 +151,10 @@ class FlowTests(TestCase):
   u=User.objects.create_user('reports',password='test');self.client.force_login(u)
   self.assertContains(self.client.get(f'/reports/?start={self.day}&end={self.day}'),'Campanha')
  def prepare_whatsapp(self):
+  # Scheduling/format tests isolate the verification layer, covered separately.
+  from unittest.mock import patch
+  verifier=patch('flow.whatsapp.verified_total',side_effect=lambda day:report(day)['totals']['entries'])
+  verifier.start();self.addCleanup(verifier.stop)
   from .models import WhatsAppConfig,RawDelivery
   now=datetime.combine(timezone.localdate(),datetime.min.time(),ZoneInfo('America/Sao_Paulo'))+timedelta(hours=22,minutes=10)
   self.c.last_seen=now;self.c.save()
@@ -176,7 +180,7 @@ class FlowTests(TestCase):
   with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',side_effect=TimeoutError) as send:
    scheduled_send(now);scheduled_send(now+timedelta(minutes=1));self.assertEqual(send.call_count,1)
   self.assertEqual(WhatsAppDelivery.objects.get().status,'unknown')
- def test_whatsapp_missing_data(self):
+ def test_whatsapp_verified_zero_message(self):
   from unittest.mock import patch
   from .whatsapp import scheduled_send
   from .models import WhatsAppDelivery
@@ -184,7 +188,7 @@ class FlowTests(TestCase):
   with patch('flow.whatsapp.session_info',return_value={'status':'WORKING'}),patch('flow.whatsapp.gateway',return_value={'id':'abc'}) as send:
    scheduled_send(now);self.assertEqual(send.call_args.args[2]['text'],'*MENSAGEM AUTOMATICA*\n\nfluxo final 0')
   self.assertEqual(WhatsAppDelivery.objects.get().status,'accepted')
- def test_whatsapp_entries_offline_devices_and_skipped_retry(self):
+ def test_whatsapp_verified_entries_and_skipped_retry(self):
   from unittest.mock import patch
   from .whatsapp import scheduled_send
   from .models import WhatsAppDelivery,WhatsAppConfig

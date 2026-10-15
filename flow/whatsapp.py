@@ -5,7 +5,8 @@ from urllib.error import HTTPError
 from django.db import transaction
 from django.utils import timezone
 from .models import WhatsAppConfig,WhatsAppDelivery,CalendarException
-from .services import report,ZONE
+from .services import ZONE
+from .verification import verified_total,VerificationError
 
 def gateway(method,path,body=None,binary=False):
     base=os.getenv('WAHA_URL','http://waha:3000').rstrip('/')
@@ -68,15 +69,27 @@ def scheduled_send(now=None):
         try:slot=time.fromisoformat(value)
         except (ValueError,TypeError):continue
         scheduled=local.replace(hour=slot.hour,minute=slot.minute,second=0,microsecond=0)
-        if not scheduled<=local<scheduled+timedelta(minutes=10):continue
+        window_end=scheduled+timedelta(minutes=10) if slot<final_time(local.date()) else local.replace(hour=23,minute=59,second=59,microsecond=999999)
+        if not scheduled<=local<window_end:continue
         cutoff=final_time(local.date())
         if slot<cutoff and local.time().replace(tzinfo=None)>=cutoff:continue
-        for chat_id in recipients(cfg):
-            if WhatsAppDelivery.objects.filter(day=local.date(),scheduled_time=slot,chat_id=chat_id).exclude(status='skipped').exists():continue
-            try:
-                if session_info().get('status')!='WORKING':continue
-            except Exception:continue
-            text=flow_message(local,report(local.date())['totals']['entries'])
+        pending=[chat for chat in recipients(cfg) if not WhatsAppDelivery.objects.filter(day=local.date(),scheduled_time=slot,chat_id=chat).exclude(status='skipped').exists()]
+        if not pending:continue
+        try:
+            if session_info().get('status')!='WORKING':continue
+        except Exception:continue
+        try:entries=verified_total(local.date())
+        except Exception as exc:
+            reason=str(exc) if isinstance(exc,VerificationError) else 'Não foi possível concluir a verificação dos dados'
+            with transaction.atomic():
+                locked=WhatsAppConfig.objects.select_for_update().get(pk=1)
+                for chat in pending:
+                    delivery,_=WhatsAppDelivery.objects.get_or_create(day=local.date(),scheduled_time=slot,chat_id=chat,defaults={'text':'','status':'skipped'})
+                    if delivery.status=='skipped':
+                        delivery.detail=('Envio bloqueado: '+reason)[:250];delivery.save(update_fields=['detail'])
+            continue
+        text=flow_message(local,entries)
+        for chat_id in pending:
             with transaction.atomic():
                 locked=WhatsAppConfig.objects.select_for_update().get(pk=1)
                 current=daily_times(locked,local.date())
@@ -100,7 +113,9 @@ def send_test(cfg,actor):
     if not recipients(cfg):raise ValueError('Salve um número ou grupo antes de testar.')
     if session_info().get('status')!='WORKING':raise ValueError('Conecte o WhatsApp pelo QR antes de testar.')
     local=timezone.now().astimezone(ZONE)
-    text=flow_message(local,report(local.date())['totals']['entries'])
+    try:entries=verified_total(local.date())
+    except VerificationError as exc:raise ValueError('Teste bloqueado: '+str(exc)) from exc
+    text=flow_message(local,entries)
     uncertain=0
     for chat_id in recipients(cfg):
         audit=AuditLog.objects.create(actor=actor,action='whatsapp_test',object_type='WhatsAppConfig',object_id=str(cfg.pk),changes={'status':'sending','recipient':chat_id,'text':text})

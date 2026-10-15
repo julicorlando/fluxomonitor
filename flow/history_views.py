@@ -3,9 +3,10 @@ from datetime import timedelta
 from django import forms
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.shortcuts import render,redirect
+from django.http import JsonResponse
 from django.db import transaction
 from django.utils import timezone
-from .models import Camera,HistoryImport,AuditLog
+from .models import Camera,HistoryImport,AuditLog,ImportCleanup
 from .services import ZONE
 
 class ImportForm(forms.ModelForm):
@@ -34,6 +35,14 @@ def imports(request):
     today=timezone.now().astimezone(ZONE).date()
     form=ImportForm(initial={'start':today-timedelta(days=89),'end':today})
     if request.method=='POST':
+        if request.POST.get('action') in ('cleanup','restore'):
+            if not request.user.is_superuser:
+                from django.http import HttpResponseForbidden
+                return HttpResponseForbidden()
+            from .import_cleanup import cleanup,restore
+            if request.POST['action']=='cleanup':cleanup(request.user.get_username())
+            else:restore(int(request.POST.get('archive_id','0')),request.user.get_username())
+            return redirect('/imports/')
         if request.POST.get('action')=='retry':
             with transaction.atomic():
                 candidate=HistoryImport.objects.filter(pk=request.POST.get('job_id')).first()
@@ -45,6 +54,7 @@ def imports(request):
                         # timestamp search may have skipped. Readings remain deduplicated.
                         job.status='pending';job.initialized=False;job.offset=0
                         job.scanned=0;job.imported=0;job.last_timestamp=None
+                        job.first_offset=None;job.target_offset=None
                         job.earliest_available=None;job.error='';job.save()
                         AuditLog.objects.create(actor=request.user.get_username(),action='history_retry',object_type='HistoryImport',object_id=str(job.pk),changes={})
             return redirect('/imports/')
@@ -64,5 +74,14 @@ def imports(request):
                     job=form.save()
                     AuditLog.objects.create(actor=request.user.get_username(),action='history_import',object_type='HistoryImport',object_id=str(job.pk),changes={'camera':camera.pk,'start':str(job.start),'end':str(job.end)})
                     return redirect('/imports/')
-    jobs=HistoryImport.objects.select_related('camera').order_by('-id')[:50]
-    return render(request,'imports.html',{'form':form,'jobs':jobs})
+    jobs=HistoryImport.objects.exclude(status='archived').select_related('camera').order_by('-id')[:50]
+    from .import_cleanup import preview
+    return render(request,'imports.html',{'form':form,'jobs':jobs,'cleanup_preview':preview() if request.user.is_superuser else None,'archives':ImportCleanup.objects.only('id','created_at','restored_at').filter(restored_at__isnull=True).order_by('-id')[:10] if request.user.is_superuser else []})
+
+@login_required
+@user_passes_test(lambda u:u.is_staff)
+def progress(request):
+    jobs=HistoryImport.objects.exclude(status='archived').order_by('-id')[:50]
+    response=JsonResponse({'jobs':[{'id':j.pk,'status':j.status,'progress':j.progress,'scanned':j.scanned,'imported':j.imported,'error':j.error} for j in jobs]})
+    response['Cache-Control']='no-store'
+    return response

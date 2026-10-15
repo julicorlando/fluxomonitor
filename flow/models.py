@@ -191,3 +191,24 @@ class PublicLink(models.Model):
     revoked_at=models.DateTimeField(null=True,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
     actor=models.CharField(max_length=150)
+
+
+class PlateCamera(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    enabled = models.BooleanField(default=True)
+    token_digest = models.CharField(max_length=64, unique=True)
+    last_seen = models.DateTimeField(null=True, blank=True)
+    def __str__(self): return self.name
+
+class PlateCapture(models.Model):
+    camera = models.ForeignKey(PlateCamera, on_delete=models.PROTECT)
+    event_id = models.UUIDField()
+    plate = models.CharField(max_length=7, db_index=True)
+    captured_at = models.DateTimeField(db_index=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    confidence = models.FloatField()
+    image = models.BinaryField()
+    reviewed = models.BooleanField(default=False)
+    class Meta:
+        ordering = ['-captured_at', '-id']
+        constraints = [models.UniqueConstraint(fields=['camera', 'event_id'], name='unique_plate_camera_event')]

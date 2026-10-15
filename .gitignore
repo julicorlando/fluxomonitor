@@ -2,3 +2,8 @@
 *.sqlite3
 __pycache__/
 staticfiles/
+
+# Local plate collector data and credentials
+*.sqlite3
+*.sqlite3-journal
+.env.plates*

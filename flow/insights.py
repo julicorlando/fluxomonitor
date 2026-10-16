@@ -1,3 +1,4 @@
+from .adjustments import admin_adjustment
 """Read-only analysis of stored flow records. Never polls or changes devices."""
 import calendar,csv
 from datetime import date,datetime,time,timedelta
@@ -103,6 +104,9 @@ def insights(request):
         elapsed=datetime.fromisoformat(current['through'])-datetime.combine(start,time.min,tzinfo=ZONE)
         prev_cutoff=min(now,datetime.combine(prev_start,time.min,tzinfo=ZONE)+elapsed) if current['partial'] else now
         previous=summarize(mode,prev_start,prev_end,cameras,prev_cutoff,device,group,grain)
+        if request.user.is_superuser:
+            current['adjustment']=admin_adjustment(request,current['totals']['entries'])
+            previous['adjustment']=admin_adjustment(request,previous['totals']['entries'])
         base=previous['totals']['entries'];difference=current['totals']['entries']-base
         if request.GET.get('format')=='csv':
             response=HttpResponse(content_type='text/csv; charset=utf-8')

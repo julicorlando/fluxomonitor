@@ -8,6 +8,8 @@ from django.shortcuts import render,redirect
 from .models import WhatsAppConfig,WhatsAppDelivery,HistoryImport,Camera,AuditLog
 from django.utils import timezone
 from .services import report,ZONE
+from .adjustments import adjusted_entries
+from .intelligence import entries_day
 from .whatsapp import gateway,start_session,session_info,list_groups,send_test,recipients,daily_times,flow_message,final_time
 
 class ConfigForm(forms.ModelForm):
@@ -17,11 +19,14 @@ class ConfigForm(forms.ModelForm):
     group=forms.MultipleChoiceField(label='Grupos (pode selecionar vários)',required=False,widget=forms.CheckboxSelectMultiple)
     class Meta:
         model=WhatsAppConfig
-        fields=['enabled']
+        fields=['enabled','error_margin_percent']
         labels={'enabled':'Ativar envio diário','metric':'Qual soma enviar','send_at':'Horário (Brasília)'}
-        widgets={'send_at':forms.TimeInput(attrs={'type':'time'})}
+        widgets={'error_margin_percent':forms.NumberInput(attrs={'min':'0','max':'100','step':'0.01'}),'send_at':forms.TimeInput(attrs={'type':'time'})}
     def __init__(self,*a,groups=None,**kw):
         super().__init__(*a,**kw)
+        # Preserve the saved percentage for older browser tabs that omit the new field.
+        if self.is_bound and 'error_margin_percent' not in self.data:
+            self.data=self.data.copy();self.data['error_margin_percent']=str(self.instance.error_margin_percent)
         choices=list(groups or [])
         known={k for k,v in choices}
         choices.extend((c,c) for c in recipients(self.instance) if c.endswith('@g.us') and c not in known)
@@ -58,6 +63,7 @@ def settings(request):
         if status=='WORKING':groups=list_groups()
     except Exception:error='Gateway indisponível ou sessão ainda não criada. Confira WAHA_API_KEY e o serviço waha.'
     initial={'number':', '.join(c.removesuffix('@c.us') for c in recipients(cfg) if c.endswith('@c.us')), 'group':[c for c in recipients(cfg) if c.endswith('@g.us')]}
+    old_margin=str(cfg.error_margin_percent)
     form=ConfigForm(request.POST or None,instance=cfg,groups=groups,initial=initial)
     if request.method=='POST':
         if request.POST.get('action')=='connect':
@@ -74,9 +80,13 @@ def settings(request):
             try:gateway('POST','/api/sessions/default/logout',{});cfg.enabled=False;cfg.save();return redirect('/whatsapp/')
             except Exception:error='Não foi possível desconectar a sessão.'
         elif form.is_valid():
-            cfg=form.save(commit=False);cfg.chat_id=form.cleaned_data['chat_id'];cfg.recipient_label=', '.join(dict(groups).get(c,c) for c in cfg.chat_ids)[:150];cfg.save();return redirect('/whatsapp/')
+            cfg=form.save(commit=False);cfg.chat_id=form.cleaned_data['chat_id'];cfg.recipient_label=', '.join(dict(groups).get(c,c) for c in cfg.chat_ids)[:150];cfg.save()
+            if old_margin!=str(cfg.error_margin_percent):AuditLog.objects.create(actor=request.user.get_username(),action='margin_changed',object_type='WhatsAppConfig',object_id='1',changes={'before':old_margin,'after':str(cfg.error_margin_percent)})
+            return redirect('/whatsapp/')
+    cfg.refresh_from_db()
     local=timezone.now().astimezone(ZONE);day=local.date()
-    entries=report(day)['totals']['entries']
+    entries=entries_day(day)['totals']['entries']
+    adjustment=adjusted_entries(entries,cfg.error_margin_percent)
     included=list(Camera.objects.filter(enabled=True,include_in_total=True))
     recent=sum(bool(c.last_seen and (timezone.now()-c.last_seen).total_seconds()<=max(180,c.expected_interval*3)) for c in included)
     pending_imports=HistoryImport.objects.filter(camera__ip__in=[c.ip for c in included],start__lte=day,end__gte=day).exclude(status__in=['completed','archived']).exists()
@@ -86,7 +96,7 @@ def settings(request):
         schedule.append({'time':value,'final':slot==final_time(day),'past':slot<local.time().replace(tzinfo=None)})
     future=[item for item in schedule if not item['past']]
     next_send=future[0]['time']+' hoje' if future else daily_times(cfg,day+timedelta(days=1))[0]+' amanhã'
-    response=render(request,'whatsapp.html',{'form':form,'cfg':cfg,'status':status,'error':error,'deliveries':WhatsAppDelivery.objects.order_by('-day','-scheduled_time','-id')[:30],'preview':flow_message(local,entries),'preview_entries':entries,'schedule':schedule,'next_send':next_send,'recipient_count':len(recipients(cfg)),'recent':recent,'included_count':len(included),'pending_imports':pending_imports,'last_verified':AuditLog.objects.filter(action='whatsapp_verified').order_by('-at').first()})
+    response=render(request,'whatsapp.html',{'form':form,'cfg':cfg,'status':status,'error':error,'deliveries':WhatsAppDelivery.objects.order_by('-day','-scheduled_time','-id')[:30],'adjustment':adjustment,'preview':flow_message(local,adjustment['adjusted']),'preview_entries':entries,'schedule':schedule,'next_send':next_send,'recipient_count':len(recipients(cfg)),'recent':recent,'included_count':len(included),'pending_imports':pending_imports,'last_verified':AuditLog.objects.filter(action='whatsapp_verified').order_by('-at').first()})
     response['Cache-Control']='no-store';return response
 @login_required
 @user_passes_test(lambda u:u.is_superuser)

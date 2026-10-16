@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator,MaxValueValidator
+from decimal import Decimal
 class DeviceGroup(models.Model):
     name=models.CharField(max_length=100,unique=True)
     def __str__(self):return self.name
@@ -114,6 +116,7 @@ class ScheduledSummary(models.Model):
         constraints=[models.UniqueConstraint(fields=['kind','start','end'],name='unique_summary_period')]
 
 class WhatsAppConfig(models.Model):
+    error_margin_percent=models.DecimalField("Margem de erro (%)",max_digits=5,decimal_places=2,default=Decimal("0.00"),validators=[MinValueValidator(0),MaxValueValidator(100)],help_text="Desconto sobre a soma total de entradas enviada pelo WhatsApp. De 0 a 100%, com até duas casas decimais.")
     chat_ids=models.JSONField(default=list,blank=True)
     send_times=models.JSONField(default=list,blank=True)
     enabled=models.BooleanField(default=False)
@@ -122,6 +125,7 @@ class WhatsAppConfig(models.Model):
     metric=models.CharField(max_length=20,default='entries',choices=[('entries','Entradas'),('passages','Entradas + saídas')])
     send_at=models.TimeField(default='22:10')
 class WhatsAppDelivery(models.Model):
+    adjustment=models.JSONField(null=True,blank=True)
     scheduled_time=models.TimeField(default='22:10')
     day=models.DateField()
     chat_id=models.CharField(max_length=100)

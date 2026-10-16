@@ -7,6 +7,7 @@ from django.utils import timezone
 from .models import WhatsAppConfig,WhatsAppDelivery,CalendarException
 from .services import ZONE
 from .verification import verified_total,VerificationError
+from .adjustments import adjusted_entries
 
 def gateway(method,path,body=None,binary=False):
     base=os.getenv('WAHA_URL','http://waha:3000').rstrip('/')
@@ -88,17 +89,18 @@ def scheduled_send(now=None):
                     if delivery.status=='skipped':
                         delivery.detail=('Envio bloqueado: '+reason)[:250];delivery.save(update_fields=['detail'])
             continue
-        text=flow_message(local,entries)
         for chat_id in pending:
             with transaction.atomic():
                 locked=WhatsAppConfig.objects.select_for_update().get(pk=1)
                 current=daily_times(locked,local.date())
                 if not locked.enabled or chat_id not in recipients(locked) or value not in current:continue
-                delivery,created=WhatsAppDelivery.objects.get_or_create(day=local.date(),scheduled_time=slot,chat_id=chat_id,defaults={'text':text,'status':'sending'})
+                adjustment=adjusted_entries(entries,locked.error_margin_percent)
+                text=flow_message(local,adjustment['adjusted'])
+                delivery,created=WhatsAppDelivery.objects.get_or_create(day=local.date(),scheduled_time=slot,chat_id=chat_id,defaults={'text':text,'status':'sending','adjustment':adjustment})
                 if not created:
                     if delivery.status!='skipped':continue
-                    delivery.chat_id=chat_id;delivery.text=text;delivery.status='sending';delivery.detail='';delivery.gateway_id=''
-                    delivery.save(update_fields=['chat_id','text','status','detail','gateway_id'])
+                    delivery.adjustment=adjustment;delivery.chat_id=chat_id;delivery.text=text;delivery.status='sending';delivery.detail='';delivery.gateway_id=''
+                    delivery.save(update_fields=['chat_id','text','status','detail','gateway_id','adjustment'])
             try:
                 result=gateway('POST','/api/sendText',{'session':'default','chatId':delivery.chat_id,'text':delivery.text})
                 ident=result.get('id','')
@@ -115,10 +117,13 @@ def send_test(cfg,actor):
     local=timezone.now().astimezone(ZONE)
     try:entries=verified_total(local.date())
     except VerificationError as exc:raise ValueError('Teste bloqueado: '+str(exc)) from exc
-    text=flow_message(local,entries)
+    cfg.refresh_from_db()
+    if not recipients(cfg):raise ValueError('Salve um número ou grupo antes de testar.')
+    adjustment=adjusted_entries(entries,cfg.error_margin_percent)
+    text=flow_message(local,adjustment['adjusted'])
     uncertain=0
     for chat_id in recipients(cfg):
-        audit=AuditLog.objects.create(actor=actor,action='whatsapp_test',object_type='WhatsAppConfig',object_id=str(cfg.pk),changes={'status':'sending','recipient':chat_id,'text':text})
+        audit=AuditLog.objects.create(actor=actor,action='whatsapp_test',object_type='WhatsAppConfig',object_id=str(cfg.pk),changes={'status':'sending','recipient':chat_id,'text':text,'adjustment':adjustment})
         try:
             gateway('POST','/api/sendText',{'session':'default','chatId':chat_id,'text':text})
             status='accepted'

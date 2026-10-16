@@ -11,6 +11,7 @@ from django.utils.dateparse import parse_datetime
 from .models import Camera,ApiKey,RawDelivery,Reading,DailyReport
 from .services import report,close_day,ZONE
 from .forms import DeviceForm
+from .adjustments import admin_adjustment
 
 def access(scope):
     def deco(fn):
@@ -38,6 +39,7 @@ def live(request):
     scoped=request.api_key.camera_id if request.api_key else None
     if scoped and requested and scoped!=requested:return JsonResponse({'error':'Sem permissão'},status=403)
     data=report(day,scoped or requested,group,until=timezone.now() if day==timezone.now().astimezone(ZONE).date() else None)
+    if request.user.is_superuser:data['adjustment']=admin_adjustment(request,data['totals']['entries'])
     data['devices']=data['cameras']
     return JsonResponse(data)
 @access('read')

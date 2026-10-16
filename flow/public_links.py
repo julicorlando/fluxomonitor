@@ -112,11 +112,45 @@ def public(request,token,as_json=False):
     if len(token)>100:return protected(HttpResponse('Link indisponível.',status=404))
     link=PublicLink.objects.filter(digest=hashlib.sha256(token.encode()).hexdigest(),revoked_at__isnull=True,expires_at__gt=timezone.now()).first()
     if not link:return protected(HttpResponse('Link expirado, revogado ou inexistente.',status=404))
-    initial={'mode':'day','reference':str(timezone.now().astimezone(ZONE).date())}
-    form=CompareForm(request.GET or initial);data=None;comparison=None;error=None;rows=[];variation=None
+    return render_public(request,link,as_json=as_json)
+
+
+def calendar_data(link,data,reference,now):
+    start=reference.replace(day=1);today=now.astimezone(ZONE).date()
+    last=start.replace(day=calendar.monthrange(start.year,start.month)[1])
+    points={int(p['label']):p['entries'] for p in data['points']}
+    cameras=Camera.objects.filter(enabled=True)
+    cameras=cameras.filter(pk=link.camera_id) if link.camera_id else cameras.filter(include_in_total=True)
+    jobs=list(HistoryImport.objects.filter(camera__in=cameras,start__lte=last,end__gte=start).exclude(status__in=['completed','archived']).values_list('start','end'))
+    days=[];maximum=max([1,*points.values()])
+    for n in range(1,last.day+1):
+        day=start.replace(day=n);has=n in points
+        days.append({'date':day,'number':n,'entries':points.get(n),'has_data':has,'future':day>today,'partial':day==today and now.astimezone(ZONE).time()<time(22,10),'pending':any(a<=day<=b for a,b in jobs),'level':min(4,max(1,int(points.get(n,0)/maximum*4))) if has else 0})
+    grid=[None]*start.weekday()+days;grid += [None]*((-len(grid))%7)
+    previous=(start-timedelta(days=1)).replace(day=1) if start>date(2000,1,1) else None
+    following=(last+timedelta(days=1)) if start<today.replace(day=1) else None
+    return {'start':start,'weeks':[grid[i:i+7] for i in range(0,len(grid),7)],'days_with_data':len(points),'previous':previous,'following':following,'today':today}
+
+@login_required
+@user_passes_test(lambda u:u.is_superuser)
+def preview(request):
+    # Authenticated read-only preview: never creates a public token or visit.
+    link=PublicLink(label='Prévia da consulta pública',expires_at=timezone.now()+timedelta(hours=1))
+    return render_public(request,link,preview=True)
+
+
+def render_public(request,link,as_json=False,preview=False):
+    now=timezone.now();today=now.astimezone(ZONE).date()
+    view=request.GET.get('view','reports' if as_json or 'mode' in request.GET else 'calendar')
+    if view not in ('calendar','reports'):return protected(HttpResponse('Visualização inválida.',status=400))
+    initial={'mode':'day','reference':str(today)}
+    params={'mode':'month','reference':request.GET.get('reference',str(today))} if view=='calendar' else {**initial,**request.GET.dict()}
+    form=CompareForm(params);data=None;comparison=None;error=None;rows=[];variation=None;month=None
     if form.is_valid():
         try:
-            mode=form.cleaned_data['mode'];data=analytics(link,mode,form.cleaned_data['reference'],form.cleaned_data.get('end'))
+            mode=form.cleaned_data['mode'];reference=form.cleaned_data['reference']
+            data=analytics(link,mode,reference,form.cleaned_data.get('end'))
+            if view=='calendar':month=calendar_data(link,data,reference,now)
             if form.cleaned_data.get('compare'):comparison=analytics(link,mode,form.cleaned_data['compare'],form.cleaned_data.get('compare_end'))
             main={p['label']:p for p in data['points']};other={p['label']:p for p in comparison['points']} if comparison else {}
             top=max([1]+[p['entries'] for p in list(main.values())+list(other.values())])
@@ -125,14 +159,13 @@ def public(request,token,as_json=False):
                 rows.append({'label':label,'entries':a,'comparison':b,'height':round(a/top*100,1),'compare_height':round(b/top*100,1)})
             if comparison and comparison['totals']['entries']:
                 variation=round(100*(data['totals']['entries']-comparison['totals']['entries'])/comparison['totals']['entries'],1)
-        except ValueError as exc:error=str(exc)
+        except (ValueError,OverflowError) as exc:error=str(exc) or 'Período inválido.'
     else:error='Verifique as datas e o tipo de comparação.'
     if as_json:
-        return protected(JsonResponse({'error':error} if error else {'data':data,'comparison':comparison,'variation_percent':variation,'updated_at':timezone.now().isoformat()},status=400 if error else 200))
-    response=protected(render(request,'public_bi.html',{'link':link,'form':form,'data':data,'comparison':comparison,'rows':rows,'variation':variation,'error':error,'updated_at':timezone.now()}))
-    if request.method=='GET' and response.status_code==200:
+        return protected(JsonResponse({'error':error} if error else {'data':data,'comparison':comparison,'variation_percent':variation,'updated_at':now.isoformat()},status=400 if error else 200))
+    response=protected(render(request,'public_bi.html',{'link':link,'form':form,'data':data,'comparison':comparison,'rows':rows,'variation':variation,'error':error,'updated_at':now,'view':view,'month':month,'preview':preview,'reference':form['reference'].value(),'today':today}))
+    if not preview and request.method=='GET' and response.status_code==200:
         accessed=timezone.now()
-        # Database-side increment prevents lost counts on simultaneous visits.
         PublicLink.objects.filter(pk=link.pk,revoked_at__isnull=True,expires_at__gt=accessed).update(
             access_count=F('access_count')+1,
             last_access_at=Greatest(Coalesce('last_access_at',Value(accessed)),Value(accessed)))

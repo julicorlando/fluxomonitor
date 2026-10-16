@@ -2,9 +2,9 @@ import calendar,hashlib,secrets
 from datetime import date,datetime,time,timedelta
 from django import forms
 from django.contrib.auth.decorators import login_required,user_passes_test
-from django.db.models import Sum,Min
+from django.db.models import Sum
 from django.db import transaction
-from django.db.models.functions import TruncHour,TruncDate,TruncMonth
+from django.db.models.functions import TruncHour,TruncDate,TruncMonth,TruncTime
 from django.http import HttpResponse,JsonResponse
 from django.shortcuts import render,redirect
 from django.utils import timezone
@@ -24,20 +24,15 @@ class LinkForm(forms.ModelForm):
     duration_days=forms.IntegerField(label='Validade em dias',min_value=1,max_value=365,initial=7,help_text='De 1 a 365 dias. Pode prorrogar o mesmo link ou revogar a qualquer momento.')
     class Meta:
         model=PublicLink
-        fields=['label','camera','start','end']
-        labels={'label':'Nome do link','camera':'Dispositivo (vazio = todos incluídos na soma)','start':'Histórico permitido desde','end':'Histórico permitido até'}
-        widgets={'start':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}),'end':forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'})}
-    def clean(self):
-        data=super().clean();start=data.get('start');end=data.get('end')
-        if start and end and (start>end or start<date(2000,1,1) or end>timezone.now().astimezone(ZONE).date()):raise forms.ValidationError('Informe um período válido, de 2000 até hoje.')
-        return data
+        fields=['label']
+        labels={'label':'Nome do link'}
+
 
 @login_required
 @user_passes_test(lambda u:u.is_superuser)
 def manage(request):
-    today=timezone.now().astimezone(ZONE).date();url=None;extension_error=None
-    earliest=Reading.objects.aggregate(first=Min('timestamp'))['first']
-    form=LinkForm(initial={'start':earliest.astimezone(ZONE).date() if earliest else today,'end':today})
+    url=None;extension_error=None
+    form=LinkForm()
     if request.method=='POST':
         if request.POST.get('action')=='extend':
             try:
@@ -60,41 +55,50 @@ def manage(request):
         form=LinkForm(request.POST) if not extension_error else form
         if not extension_error and form.is_valid():
             token=secrets.token_urlsafe(32);link=form.save(commit=False)
+            # Legacy date columns are retained for database compatibility only.
+            link.start=date(2000,1,1);link.end=date(9999,12,31)
             link.digest=hashlib.sha256(token.encode()).hexdigest();link.actor=request.user.get_username()
             link.expires_at=timezone.now()+timedelta(days=form.cleaned_data['duration_days']);link.save()
             url=request.build_absolute_uri('/public/'+token+'/')
-            AuditLog.objects.create(actor=link.actor,action='public_link_create',object_type='PublicLink',object_id=str(link.pk),changes={'start':str(link.start),'end':str(link.end),'expires_at':link.expires_at.isoformat(),'camera_id':link.camera_id})
+            AuditLog.objects.create(actor=link.actor,action='public_link_create',object_type='PublicLink',object_id=str(link.pk),changes={'history':'all_available','daily_cutoff':'22:10','metric':'entries','expires_at':link.expires_at.isoformat()})
     return protected(render(request,'public_links.html',{'form':form,'public_url':url,'extension_error':extension_error,'links':PublicLink.objects.select_related('camera').order_by('-id')[:100]}),admin_form=True)
 
 class CompareForm(forms.Form):
-    mode=forms.ChoiceField(label='Comparar por',choices=[('day','Dia a dia'),('month','Mês a mês'),('year','Ano a ano')])
+    mode=forms.ChoiceField(label='Comparar por',choices=[('day','Dia a dia'),('month','Mês a mês'),('year','Ano a ano'),('range','Período personalizado')])
     reference=forms.DateField(label='Data de referência',widget=forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}))
+    end=forms.DateField(label='Data final (período personalizado)',required=False,widget=forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}))
+    compare_end=forms.DateField(label='Fim da comparação (período personalizado)',required=False,widget=forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}))
     compare=forms.DateField(label='Comparar com (opcional)',required=False,widget=forms.DateInput(format='%Y-%m-%d',attrs={'type':'date'}))
 
-def period(mode,reference,link):
+def period(mode,reference,link,end_date=None):
     today=timezone.now().astimezone(ZONE).date()
     if mode=='year':start=date(reference.year,1,1);end=date(reference.year,12,31)
     elif mode=='month':start=reference.replace(day=1);end=reference.replace(day=calendar.monthrange(reference.year,reference.month)[1])
+    elif mode=='range':
+        if not end_date:raise ValueError('Informe a data final do período personalizado.')
+        start=reference;end=end_date
     else:start=end=reference
     end=min(end,today)
-    if start<link.start or end>link.end or start>end:raise ValueError('O período escolhido está fora do histórico permitido neste link. Para mês/ano atual, os dados vão até hoje.')
+    if start<date(2000,1,1) or start>end:raise ValueError('Informe um período válido, de 2000 até hoje.')
     return start,end
 
-def analytics(link,mode,reference):
-    start,end=period(mode,reference,link)
+def analytics(link,mode,reference,end_date=None):
+    start,end=period(mode,reference,link,end_date)
     begin=datetime.combine(start,time.min,tzinfo=ZONE);finish=datetime.combine(end+timedelta(days=1),time.min,tzinfo=ZONE)
     cameras=Camera.objects.filter(enabled=True)
     cameras=cameras.filter(pk=link.camera_id) if link.camera_id else cameras.filter(include_in_total=True)
-    readings=Reading.objects.filter(camera__in=cameras,timestamp__gte=begin,timestamp__lt=finish)
+    # Apply the closing time to EVERY local day, not only the end of the range.
+    now=timezone.now()
+    readings=Reading.objects.filter(camera__in=cameras,timestamp__gte=begin,timestamp__lt=finish,timestamp__lte=now).annotate(local_time=TruncTime('timestamp',tzinfo=ZONE)).filter(local_time__lte=time(22,10))
     if readings.exclude(mode='delta').exists():raise ValueError('Há contadores acumulados neste período; normalize os eventos antes da consulta BI pública.')
-    trunc={'day':TruncHour,'month':TruncDate,'year':TruncMonth}[mode]
-    grouped=list(readings.annotate(bucket=trunc('timestamp',tzinfo=ZONE)).values('bucket').annotate(entries=Sum('entries'),exits=Sum('exits')).order_by('bucket'))
-    points=[];totals={'entries':0,'exits':0,'balance':0,'passages':0}
+    trunc={'day':TruncHour,'month':TruncDate,'year':TruncMonth,'range':TruncDate}[mode]
+    grouped=list(readings.annotate(bucket=trunc('timestamp',tzinfo=ZONE)).values('bucket').annotate(entries=Sum('entries')).order_by('bucket'))
+    points=[];totals={'entries':0}
     for row in grouped:
-        key=row['bucket'];label=key.strftime('%H:%M' if mode=='day' else '%d' if mode=='month' else '%m')
-        a=row['entries'];b=row['exits'];totals['entries']+=a;totals['exits']+=b
-        points.append({'label':label,'entries':a,'exits':b,'passages':a+b})
-    totals['balance']=totals['entries']-totals['exits'];totals['passages']=totals['entries']+totals['exits']
+        key=row['bucket'];label=key.strftime('%H:%M' if mode=='day' else '%d' if mode=='month' else '%m' if mode=='year' else '%d/%m/%Y')
+        if mode=='range':label=f'Dia {(key-start).days+1:05d}'
+        a=row['entries'];totals['entries']+=a
+        points.append({'label':label,'entries':a})
     names=list(cameras.values_list('name',flat=True))
     present=set(readings.values_list('camera_id',flat=True).distinct())
     missing=list(cameras.exclude(pk__in=present).values_list('name',flat=True))
@@ -102,18 +106,18 @@ def analytics(link,mode,reference):
     warnings=[]
     if missing:warnings.append('Sem registros no período: '+', '.join(missing))
     if pending:warnings.append('Há importações não concluídas neste período; os totais podem mudar.')
-    return {'start':str(start),'end':str(end),'totals':totals,'points':points,'has_data':bool(grouped),'devices':names,'warnings':warnings,'pending_imports':pending}
+    return {'start':str(start),'end':str(end),'totals':totals,'points':points,'has_data':bool(grouped),'devices':names,'warnings':warnings,'pending_imports':pending,'daily_cutoff':'22:10','partial':end==now.astimezone(ZONE).date() and now.astimezone(ZONE).time()<time(22,10)}
 
 def public(request,token,as_json=False):
     if len(token)>100:return protected(HttpResponse('Link indisponível.',status=404))
     link=PublicLink.objects.filter(digest=hashlib.sha256(token.encode()).hexdigest(),revoked_at__isnull=True,expires_at__gt=timezone.now()).first()
     if not link:return protected(HttpResponse('Link expirado, revogado ou inexistente.',status=404))
-    initial={'mode':'day','reference':str(link.end)}
+    initial={'mode':'day','reference':str(timezone.now().astimezone(ZONE).date())}
     form=CompareForm(request.GET or initial);data=None;comparison=None;error=None;rows=[];variation=None
     if form.is_valid():
         try:
-            mode=form.cleaned_data['mode'];data=analytics(link,mode,form.cleaned_data['reference'])
-            if form.cleaned_data.get('compare'):comparison=analytics(link,mode,form.cleaned_data['compare'])
+            mode=form.cleaned_data['mode'];data=analytics(link,mode,form.cleaned_data['reference'],form.cleaned_data.get('end'))
+            if form.cleaned_data.get('compare'):comparison=analytics(link,mode,form.cleaned_data['compare'],form.cleaned_data.get('compare_end'))
             main={p['label']:p for p in data['points']};other={p['label']:p for p in comparison['points']} if comparison else {}
             top=max([1]+[p['entries'] for p in list(main.values())+list(other.values())])
             for label in sorted(main.keys()|other.keys()):

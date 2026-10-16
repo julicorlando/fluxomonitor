@@ -66,7 +66,75 @@ class PublicLinkTests(TestCase):
         page=self.client.get('/public/testtoken/',{'mode':'month','reference':str(self.day)})
         self.assertContains(page,'Imprimir / salvar PDF');self.assertNotContains(page,'Menu principal')
         self.assertContains(page,'value="2025-05-10"')
-        self.assertEqual(self.client.get('/public/testtoken/data/',{'mode':'year','reference':'2023-01-01'}).status_code,400)
+        self.assertEqual(self.client.get('/public/testtoken/data/',{'mode':'year','reference':'2023-01-01'}).status_code,200)
+    def add_event(self,day,at,entries=1):
+        raw=RawDelivery.objects.create(camera=self.camera,payload={})
+        return Reading.objects.create(camera=self.camera,event_id=f'cutoff-{raw.pk}',timestamp=datetime.combine(day,at,tzinfo=ZONE),entries=entries,exits=12345,mode='delta',raw=raw)
+
+    def test_daily_cutoff_in_all_periods_and_entry_only_payload(self):
+        self.add_event(self.day,time(22,9,59),2)
+        self.add_event(self.day,time(22,10),4)
+        self.add_event(self.day,time(22,10,1),1000)
+        self.add_event(self.day,time(23,59),1000)
+        for mode in ('day','month','year','range'):
+            query={'mode':mode,'reference':str(self.day),'end':str(self.day)}
+            response=self.client.get('/public/testtoken/data/',query)
+            self.assertEqual(response.status_code,200)
+            data=response.json()['data']
+            self.assertEqual(data['totals'],{'entries':9})
+            self.assertTrue(all(set(p)=={'label','entries'} for p in data['points']))
+            self.assertNotIn('exits',str(data));self.assertNotIn('passages',str(data))
+        page=self.client.get('/public/testtoken/',{'mode':'day','reference':str(self.day)})
+        self.assertNotContains(page,'Saídas');self.assertNotContains(page,'Saldo calculado')
+        self.assertContains(page,'22:10')
+
+    def test_each_local_day_is_cut_off_and_legacy_dates_do_not_limit_history(self):
+        self.link.start=self.day;self.link.end=self.day;self.link.save()
+        yesterday=self.day-timedelta(days=1)
+        self.add_event(yesterday,time(22,10),7)
+        self.add_event(yesterday,time(22,11),1000)
+        self.add_event(self.day,time(0,1),2)
+        data=analytics(self.link,'range',yesterday,self.day)
+        self.assertEqual(data['totals']['entries'],12)
+        self.assertEqual(len(data['points']),2)
+        self.assertEqual(analytics(self.link,'day',yesterday)['totals']['entries'],7)
+        # Existing links also see new days, beyond their old end date.
+        later=self.day+timedelta(days=1)
+        self.add_event(later,time(10),5)
+        self.assertEqual(analytics(self.link,'day',later)['totals']['entries'],5)
+
+    def test_current_day_is_partial_and_future_events_are_excluded(self):
+        now=timezone.now().astimezone(ZONE).replace(hour=12,minute=0,second=0,microsecond=0)
+        self.link.expires_at=now+timedelta(days=1);self.link.save()
+        self.add_event(now.date(),time(11),6)
+        self.add_event(now.date(),time(13),1000)
+        with patch('flow.public_links.timezone.now',return_value=now):
+            data=analytics(self.link,'day',now.date())
+            self.assertEqual(data['totals']['entries'],6);self.assertTrue(data['partial'])
+            response=self.client.get('/public/testtoken/data/')
+            self.assertEqual(response.json()['data']['start'],str(now.date()))
+        with patch('flow.public_links.timezone.now',return_value=now.replace(hour=23)):
+            self.assertFalse(analytics(self.link,'day',now.date())['partial'])
+
+    def test_create_only_requires_label_and_duration(self):
+        self.client.force_login(self.user)
+        response=self.client.post('/public-links/',{'label':'Livre','duration_days':2})
+        self.assertContains(response,'Link público gerado')
+        link=PublicLink.objects.latest('pk')
+        self.assertIsNone(link.camera_id)
+        self.assertEqual(link.start,date(2000,1,1))
+        self.assertNotContains(response,'name="start"');self.assertNotContains(response,'name="end"')
+        self.assertNotContains(response,'name="camera"')
+
+    def test_custom_range_comparison_and_invalid_dates(self):
+        query={'mode':'range','reference':'2025-05-01','end':'2025-05-31','compare':'2024-05-01','compare_end':'2024-05-31'}
+        response=self.client.get('/public/testtoken/data/',query)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['data']['totals']['entries'],3)
+        self.assertEqual(response.json()['comparison']['totals']['entries'],0)
+        for bad in ({'mode':'range','reference':str(self.day)}, {'mode':'range','reference':str(self.day),'end':'2024-01-01'}, {'mode':'day','reference':'1999-01-01'}, {'mode':'day','reference':'9999-01-01'}):
+            self.assertEqual(self.client.get('/public/testtoken/data/',bad).status_code,400)
+
     def test_expiry_revocation_and_invalid_link(self):
         self.link.expires_at=timezone.now()-timedelta(seconds=1);self.link.save()
         self.assertEqual(self.client.get('/public/testtoken/').status_code,404)

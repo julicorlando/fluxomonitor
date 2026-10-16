@@ -210,3 +210,6 @@ A ação superadmin Limpar contagens de hoje e reimportar modifica apenas o banc
 - WhatsApp: prévia não verificada, agenda calculada e histórico distinguindo aceite do gateway de entrega. Nenhuma mensagem é enviada apenas ao abrir a página.
 - PWA: manifest, ícones e experiência de instalação; service worker exibe aviso offline sem armazenar páginas autenticadas, dados da API ou links públicos. No iPhone, Safari → Compartilhar → Adicionar à Tela de Início.
 - Aplicação de migrações e arquivos estáticos permanece automática no entrypoint do deploy.
+
+### Consulta pública de entradas
+Os links temporários permitem qualquer período disponível (dia, mês, ano ou intervalo personalizado), incluindo novos dias enquanto válidos. O superadmin define somente nome e validade em dias, com prorrogação/revogação existentes. Datas antigas armazenadas no link não restringem a consulta; vínculos antigos a um dispositivo são preservados. A página, os gráficos, a impressão e o JSON expõem apenas entradas. O servidor aplica a cada data local o limite inclusivo de 22:10:00 (Brasília), além de excluir eventos futuros. Hoje é identificado como parcial antes do fechamento. Em intervalos personalizados, as comparações alinham o primeiro dia de cada período. Nenhuma contagem no sistema ou dispositivo é apagada/alterada.

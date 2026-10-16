@@ -107,7 +107,7 @@ def poll(camera):
         state.last_success=now;state.last_error='';state.save()
         camera.last_seen=now;camera.save(update_fields=['last_seen'])
         for day in changed_days:
-            if day<now.astimezone(ZONE).date():close_day(day)
+            if day<now.astimezone(ZONE).date():close_day(day,reason='Recuperação pelo coletor ao vivo')
         return len(events)
 
 def mirror(source,target):
@@ -127,5 +127,5 @@ def mirror(source,target):
         PullCursor.objects.update_or_create(camera=target,defaults={'offset':state.offset,'last_id':state.last_id,'index_mode':state.index_mode,'initialized':state.initialized,'last_success':state.last_success,'last_error':''})
         target.last_seen=source.last_seen;target.save(update_fields=['last_seen'])
         for day in days:
-            if day<timezone.now().astimezone(ZONE).date():close_day(day)
+            if day<timezone.now().astimezone(ZONE).date():close_day(day,reason='Sincronização da réplica')
         return count

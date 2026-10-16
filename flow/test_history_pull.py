@@ -28,7 +28,7 @@ class HistoryTests(TestCase):
         job.refresh_from_db();self.assertEqual(job.status,'running');self.assertEqual(job.imported,2)
         self.assertEqual(Reading.objects.count(),2)
         cursor.refresh_from_db();self.assertEqual(cursor.offset,999)
-        close.assert_called_with(self.day)
+        close.assert_called_with(self.day,reason=f'Importação histórica #{job.pk}')
         repeat=HistoryImport.objects.create(camera=self.camera,start=self.day,end=self.day,initialized=True,offset=1)
         import_batch(repeat.pk);repeat.refresh_from_db();self.assertEqual(repeat.imported,0)
         self.assertEqual(Reading.objects.count(),2)

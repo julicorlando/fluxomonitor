@@ -13,6 +13,7 @@ class Camera(models.Model):
     last_seen=models.DateTimeField(null=True,blank=True)
     group=models.ForeignKey(DeviceGroup,null=True,blank=True,on_delete=models.SET_NULL)
     include_in_total=models.BooleanField(default=True)
+    idle_alert_minutes=models.PositiveSmallIntegerField(default=60,help_text='Sem movimento durante o expediente configurado. 0 desativa; contato recente não comprova funcionamento do sensor.')
     expected_interval=models.PositiveIntegerField(default=60,help_text='Intervalo esperado em segundos')
     location=models.CharField(max_length=150,blank=True)
     manufacturer=models.CharField(max_length=100,blank=True)
@@ -96,12 +97,13 @@ class AuditLog(models.Model):
     object_id=models.CharField(max_length=80)
     changes=models.JSONField(default=dict)
 class DeviceAlert(models.Model):
+    kind=models.CharField(max_length=20,default='communication')
     camera=models.ForeignKey(Camera,on_delete=models.CASCADE)
     opened_at=models.DateTimeField()
     resolved_at=models.DateTimeField(null=True,blank=True)
     reason=models.CharField(max_length=150)
     class Meta:
-        constraints=[models.UniqueConstraint(fields=['camera'],condition=models.Q(resolved_at__isnull=True),name='one_open_alert_per_device')]
+        constraints=[models.UniqueConstraint(fields=['camera','kind'],condition=models.Q(resolved_at__isnull=True),name='one_open_alert_per_kind')]
 class ScheduledSummary(models.Model):
     kind=models.CharField(max_length=10)
     start=models.DateField()
@@ -151,6 +153,7 @@ class PullCursor(models.Model):
     last_error=models.CharField(max_length=250,blank=True)
 
 class HistoryImport(models.Model):
+    snapshot_at=models.DateTimeField(null=True,blank=True)
     first_offset=models.BigIntegerField(null=True,blank=True)
     target_offset=models.BigIntegerField(null=True,blank=True)
     camera=models.ForeignKey(Camera,on_delete=models.PROTECT)
@@ -201,3 +204,42 @@ class AccessMap(models.Model):
     image=models.BinaryField(null=True,blank=True)
     image_type=models.CharField(max_length=30,blank=True)
     updated_at=models.DateTimeField(auto_now=True)
+
+class CollectionGap(models.Model):
+    camera=models.ForeignKey(Camera,on_delete=models.PROTECT)
+    started_at=models.DateTimeField()
+    ended_at=models.DateTimeField(null=True,blank=True)
+    state=models.CharField(max_length=20,default='open')
+    job=models.ForeignKey(HistoryImport,null=True,blank=True,on_delete=models.SET_NULL)
+    attempts=models.PositiveSmallIntegerField(default=0)
+    next_retry=models.DateTimeField(default=timezone.now)
+    detail=models.CharField(max_length=250,blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['camera'],condition=models.Q(state='open'),name='one_open_collection_gap')]
+
+    @property
+    def state_label(self):
+        return {'open':'Sem comunicação','waiting':'Aguardando fila','queued':'Reexame em andamento','recovered':'Reexame concluído','review':'Revisão manual'}.get(self.state,self.state)
+
+class ReportRevision(models.Model):
+    day=models.DateField(db_index=True)
+    at=models.DateTimeField(auto_now_add=True)
+    before=models.JSONField()
+    after=models.JSONField()
+    reason=models.CharField(max_length=150)
+
+class BackupRun(models.Model):
+    created_at=models.DateTimeField(default=timezone.now)
+    finished_at=models.DateTimeField(null=True,blank=True)
+    status=models.CharField(max_length=20,default='pending')
+    actor=models.CharField(max_length=150,default='system')
+    filename=models.CharField(max_length=120,blank=True)
+    size_bytes=models.BigIntegerField(default=0)
+    checksum=models.CharField(max_length=64,blank=True)
+    verified_at=models.DateTimeField(null=True,blank=True)
+    manifest=models.JSONField(default=dict)
+    error=models.CharField(max_length=250,blank=True)
+
+    @property
+    def status_label(self):
+        return {'pending':'Aguardando execução','running':'Em execução','verified':'Restaurado e conferido','failed':'Não concluído','retained_log':'Cópia expirada; registro mantido'}.get(self.status,self.status)

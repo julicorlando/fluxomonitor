@@ -20,6 +20,12 @@ services:
     restart: unless-stopped
     ports:
       - "8086:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/',timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     environment: &env
       PFC_SERVICE_SECRET: ${PFC_SERVICE_SECRET:?Configure PFC_SERVICE_SECRET}
       PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
@@ -43,7 +49,7 @@ services:
     command: ["python", "manage.py", "poll_pfc"]
     depends_on:
       web:
-        condition: service_started
+        condition: service_healthy
   history:
     build: .
     restart: unless-stopped
@@ -51,7 +57,7 @@ services:
     command: ["python", "manage.py", "import_pfc_history"]
     depends_on:
       web:
-        condition: service_started
+        condition: service_healthy
   closer:
     build: .
     restart: unless-stopped
@@ -60,7 +66,26 @@ services:
     command: ["while true; do python manage.py close_days; sleep 60; done"]
     depends_on:
       web:
-        condition: service_started
+        condition: service_healthy
+  backup:
+    build: ./backup
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 512m
+    environment:
+      PGHOST: db
+      PGPORT: '5432'
+      PGUSER: fluxo
+      PGDATABASE: fluxo
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}
+      BACKUP_DIR: /backups
+    volumes:
+      - fluxo_backups:/backups
+    depends_on:
+      web:
+        condition: service_healthy
+      db:
+        condition: service_healthy
   waha:
     image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
     restart: unless-stopped
@@ -88,3 +113,4 @@ volumes:
   fluxo_mqtt:
   fluxo_db:
   fluxo_whatsapp:
+  fluxo_backups:

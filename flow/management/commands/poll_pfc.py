@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand,CommandError
 from django.db import close_old_connections
 from flow.models import Camera,PullCursor,RawDelivery
 from flow.pfc_pull import poll,mirror
+from flow.reliability import observe_collection,source_for
 
 class Command(BaseCommand):
     help='Consulta eventos PFC com assinatura validada no firmware do equipamento'
@@ -20,11 +21,14 @@ class Command(BaseCommand):
             sources={}
             for camera in sorted(cameras,key=lambda c:(c.replica_slot,c.pk)):
                 close_old_connections()
+                previous_success=PullCursor.objects.filter(camera=camera).values_list('last_success',flat=True).first()
                 try:
                     if camera.ip in sources:
                         count=mirror(sources[camera.ip],camera)
                     else:
+                        if source_for(camera).pk!=camera.pk:raise ValueError('Equipamento original indisponível; réplica aguarda sincronização')
                         count=poll(camera)
+                        observe_collection(camera,True,previous_success)
                         camera.refresh_from_db(fields=["last_seen"])
                         sources[camera.ip]=camera
                     self.stdout.write(f'{camera.ip}: {count} eventos consultados',ending='\n')
@@ -33,6 +37,7 @@ class Command(BaseCommand):
                     # Do not log URLs, signatures or credentials.
                     message=str(error)[:250] if isinstance(error,ValueError) else type(error).__name__
                     PullCursor.objects.update_or_create(camera=camera,defaults={'last_error':message})
+                    observe_collection(camera,False,previous_success)
                     payload=getattr(error,'payload',None)
                     if payload is not None:
                         previous=RawDelivery.objects.filter(camera=camera).order_by('-id').first()

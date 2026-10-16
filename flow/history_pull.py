@@ -48,6 +48,7 @@ def import_batch(job_id):
         if job.target_offset is None:
             job.first_offset=job.offset
             job.target_offset=find_end(camera,job.offset)
+            job.snapshot_at=timezone.now()
         events=fetch(camera,job.offset,100)
         if job.index_mode=='id':events=[e for e in events if e['idIndex']<job.target_offset]
         else:events=events[:max(0,job.target_offset-job.offset)]
@@ -74,4 +75,4 @@ def import_batch(job_id):
         if job.offset>=job.target_offset:job.status='completed'
         job.error='';job.save()
         for day in days:
-            if day<timezone.now().astimezone(ZONE).date():close_day(day)
+            if day<timezone.now().astimezone(ZONE).date():close_day(day,reason=f'Importação histórica #{job.pk}')

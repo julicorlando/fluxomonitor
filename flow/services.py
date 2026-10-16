@@ -45,7 +45,7 @@ def report(day,device_id=None,group_id=None,until=None):
     hours={f'{h:02d}:00':sum(x['passages'] for x in chart if int(x['time'][:2])==h) for h in range(24)}
     totals={k:sum(r[k] for r in rows if device_id or r["include_in_total"]) for k in ('entries','exits','balance','passages')}
     return {'date':str(day),'timezone':str(ZONE),'initial_balance':0,'cameras':rows,'totals':totals,'intervals':chart,'peak_15min':max(bins,key=bins.get) if bins and max(bins.values()) else None,'peak_hour':max(hours,key=hours.get) if max(hours.values()) else None,'warnings':sorted(set(warnings)),'peak_basis':'entradas + saídas; horário da leitura','updated_at':timezone.now().isoformat()}
-def close_day(day):
+def close_day(day,reason='Atualização das leituras'):
     with transaction.atomic():
         # Different cameras can import the same day concurrently. Serialize
         # aggregate reads/writes so the last snapshot includes committed peers.
@@ -55,5 +55,12 @@ def close_day(day):
                 # spanning several dates. Network collection stays parallel.
                 cursor.execute('SELECT pg_advisory_xact_lock(%s, %s)',[77816,0])
         data=report(day)
-        DailyReport.objects.update_or_create(day=day,defaults={'data':data})
+        old=DailyReport.objects.filter(day=day).first()
+        def snapshot(value):
+            return {'totals':value['totals'],'devices':{str(c['id']):{k:c[k] for k in ('entries','exits','passages')} for c in value['cameras']}}
+        if old and snapshot(old.data)!=snapshot(data):
+            from .models import ReportRevision,AuditLog
+            revision=ReportRevision.objects.create(day=day,before=snapshot(old.data),after=snapshot(data),reason=reason[:150])
+            AuditLog.objects.create(actor='system',action='report_revision',object_type='ReportRevision',object_id=str(revision.pk),changes={'day':str(day),'before':old.data['totals'],'after':data['totals'],'reason':reason[:150]})
+        if not old or old.data!=data:DailyReport.objects.update_or_create(day=day,defaults={'data':data})
         return data

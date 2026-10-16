@@ -80,7 +80,7 @@ def imports(request):
                         # timestamp search may have skipped. Readings remain deduplicated.
                         job.status='pending';job.initialized=False;job.offset=0
                         job.scanned=0;job.imported=0;job.last_timestamp=None
-                        job.first_offset=None;job.target_offset=None
+                        job.first_offset=None;job.target_offset=None;job.snapshot_at=None
                         job.earliest_available=None;job.error='';job.save()
                         AuditLog.objects.create(actor=request.user.get_username(),action='history_retry',object_type='HistoryImport',object_id=str(job.pk),changes={})
             return redirect('/imports/')

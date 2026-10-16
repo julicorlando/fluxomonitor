@@ -57,7 +57,7 @@ def generate_summaries():
         reports=list(DailyReport.objects.filter(day__gte=week-timedelta(days=7),day__lt=week+timedelta(days=7)).order_by('day').values('day','updated_at'))
         fingerprint=hashlib.sha256(json.dumps(reports,default=str,sort_keys=True).encode()).hexdigest()
         old=ScheduledSummary.objects.filter(kind='weekly',start=week,end=week+timedelta(days=6)).first()
-        if not old or old.data.get('fingerprint')!=fingerprint:
+        if not old or old.data.get('fingerprint')!=fingerprint or old.data.get('version')!=3:
             data=weekly_executive(week);data['fingerprint']=fingerprint
             ScheduledSummary.objects.update_or_create(kind='weekly',start=week,end=week+timedelta(days=6),defaults={'data':data})
             rebuilt+=1

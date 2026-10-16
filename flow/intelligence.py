@@ -99,9 +99,11 @@ def weekly_executive(start,now=None):
     for n in range(7):
         day=start+timedelta(days=n);d=entries_day(day,now)
         a=d['totals']['entries'];total+=a
-        days.append({'day':str(day),'entries':a,'kind':day_type(day),'blocked':day_check(day,now)['blocked']})
+        days.append({'day':str(day),'entries':a,'kind':day_type(day),'future':day>now.astimezone(ZONE).date(),'blocked':day_check(day,now)['blocked']})
         for c in d['cameras']:
             if c['include_in_total']:devices[c['name']]=devices.get(c['name'],0)+c['entries']
         for point in d['intervals']:peak[point['time']]=peak.get(point['time'],0)+point['entries']
-    previous=sum(entries_day(start-timedelta(days=7)+timedelta(days=n),now)['totals']['entries'] for n in range(7))
-    return {'version':2,'entries':total,'previous_entries':previous,'variation':round((total-previous)/previous*100,1) if previous else None,'days':days,'devices':[{'name':name,'entries':value,'share':round(value/total*100,1) if total else 0} for name,value in sorted(devices.items(),key=lambda x:-x[1])],'peak':max(peak,key=peak.get) if peak and max(peak.values()) else None,'peak_entries':max(peak.values()) if peak else 0,'pending_days':sum(d['blocked'] for d in days),'basis':'Entradas até o fechamento de cada dia. Comparação com a semana anterior; feriados e dias especiais identificados, sem ajuste estatístico. Valores disponíveis, não certificados.'}
+    partial=now<closing_at(start+timedelta(days=6))
+    previous_cutoff=now-timedelta(days=7) if partial else now
+    previous=sum(entries_day(start-timedelta(days=7)+timedelta(days=n),previous_cutoff)['totals']['entries'] for n in range(7))
+    return {'version':3,'partial':partial,'entries':total,'previous_entries':previous,'variation':round((total-previous)/previous*100,1) if previous else None,'days':days,'devices':[{'name':name,'entries':value,'share':round(value/total*100,1) if total else 0} for name,value in sorted(devices.items(),key=lambda x:-x[1])],'peak':max(peak,key=peak.get) if peak and max(peak.values()) else None,'peak_entries':max(peak.values()) if peak else 0,'pending_days':sum(d['blocked'] for d in days),'basis':'Entradas até o fechamento de cada dia. Comparação com a semana anterior no mesmo tempo transcorrido quando a semana atual está aberta. Feriados e dias especiais identificados, sem ajuste estatístico. Valores disponíveis, não certificados.'}

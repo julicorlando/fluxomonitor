@@ -106,6 +106,16 @@ class ReliabilityTests(TestCase):
         self.assertEqual(month['entries'],7)
         week=weekly_executive(self.day-timedelta(days=self.day.weekday()),self.now.replace(hour=23))
         self.assertEqual(week['entries'],7);self.assertEqual(sum(d['entries'] for d in week['devices']),7)
+    def test_open_week_compares_same_elapsed_time_not_full_previous_week(self):
+        self.event(self.day,entries=2)
+        self.event(self.day-timedelta(days=7),time(10),entries=4)
+        self.event(self.day-timedelta(days=7),time(13),entries=100)
+        self.event(self.day-timedelta(days=6),time(10),entries=100)
+        week=weekly_executive(self.day-timedelta(days=self.day.weekday()),self.now)
+        self.assertEqual(week['entries'],2);self.assertEqual(week['previous_entries'],4)
+        self.assertEqual(week['variation'],-50);self.assertTrue(week['partial'])
+        self.assertTrue(week['days'][-1]['future'])
+
     def test_idle_alert_only_in_configured_hours_and_resolves(self):
         from .operations import monitor_devices
         self.camera.last_seen=self.now;self.camera.save()

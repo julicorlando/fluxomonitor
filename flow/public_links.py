@@ -2,9 +2,9 @@ import calendar,hashlib,secrets
 from datetime import date,datetime,time,timedelta
 from django import forms
 from django.contrib.auth.decorators import login_required,user_passes_test
-from django.db.models import Sum
+from django.db.models import Sum,F,Value
 from django.db import transaction
-from django.db.models.functions import TruncHour,TruncDate,TruncMonth,TruncTime
+from django.db.models.functions import TruncHour,TruncDate,TruncMonth,TruncTime,Greatest,Coalesce
 from django.http import HttpResponse,JsonResponse
 from django.shortcuts import render,redirect
 from django.utils import timezone
@@ -129,4 +129,11 @@ def public(request,token,as_json=False):
     else:error='Verifique as datas e o tipo de comparação.'
     if as_json:
         return protected(JsonResponse({'error':error} if error else {'data':data,'comparison':comparison,'variation_percent':variation,'updated_at':timezone.now().isoformat()},status=400 if error else 200))
-    return protected(render(request,'public_bi.html',{'link':link,'form':form,'data':data,'comparison':comparison,'rows':rows,'variation':variation,'error':error,'updated_at':timezone.now()}))
+    response=protected(render(request,'public_bi.html',{'link':link,'form':form,'data':data,'comparison':comparison,'rows':rows,'variation':variation,'error':error,'updated_at':timezone.now()}))
+    if request.method=='GET' and response.status_code==200:
+        accessed=timezone.now()
+        # Database-side increment prevents lost counts on simultaneous visits.
+        PublicLink.objects.filter(pk=link.pk,revoked_at__isnull=True,expires_at__gt=accessed).update(
+            access_count=F('access_count')+1,
+            last_access_at=Greatest(Coalesce('last_access_at',Value(accessed)),Value(accessed)))
+    return response

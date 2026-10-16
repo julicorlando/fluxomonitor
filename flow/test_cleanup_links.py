@@ -135,6 +135,43 @@ class PublicLinkTests(TestCase):
         for bad in ({'mode':'range','reference':str(self.day)}, {'mode':'range','reference':str(self.day),'end':'2024-01-01'}, {'mode':'day','reference':'1999-01-01'}, {'mode':'day','reference':'9999-01-01'}):
             self.assertEqual(self.client.get('/public/testtoken/data/',bad).status_code,400)
 
+    def test_public_page_access_counts_reloads_but_not_json_head_or_post(self):
+        self.client.get('/public/testtoken/')
+        self.client.get('/public/testtoken/',{'mode':'day','reference':str(self.day)})
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.access_count,2)
+        self.assertIsNotNone(self.link.last_access_at)
+        first=self.link.last_access_at
+        self.client.get('/public/testtoken/data/')
+        self.client.head('/public/testtoken/')
+        self.client.post('/public/testtoken/',{})
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.access_count,2);self.assertEqual(self.link.last_access_at,first)
+        payload=self.client.get('/public/testtoken/data/').json()
+        self.assertNotIn('access_count',str(payload))
+        self.client.force_login(self.user)
+        page=self.client.get('/public-links/')
+        self.assertContains(page,'2 acessos');self.assertContains(page,'Último acesso:')
+        self.assertContains(page,'Não representam pessoas únicas')
+        self.link.refresh_from_db();self.assertEqual(self.link.access_count,2)
+
+    def test_unavailable_public_links_do_not_count_access(self):
+        self.link.expires_at=timezone.now()-timedelta(seconds=1);self.link.save()
+        self.client.get('/public/testtoken/')
+        self.link.refresh_from_db();self.assertEqual(self.link.access_count,0)
+        self.link.expires_at=timezone.now()+timedelta(days=1);self.link.revoked_at=timezone.now();self.link.save()
+        self.client.get('/public/testtoken/')
+        self.client.get('/public/invalid/')
+        self.link.refresh_from_db();self.assertEqual(self.link.access_count,0)
+        self.assertIsNone(self.link.last_access_at)
+
+    def test_last_access_never_moves_backwards(self):
+        future=timezone.now()+timedelta(seconds=1)
+        self.link.last_access_at=future;self.link.access_count=10;self.link.save()
+        self.client.get('/public/testtoken/')
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.access_count,11);self.assertEqual(self.link.last_access_at,future)
+
     def test_expiry_revocation_and_invalid_link(self):
         self.link.expires_at=timezone.now()-timedelta(seconds=1);self.link.save()
         self.assertEqual(self.client.get('/public/testtoken/').status_code,404)

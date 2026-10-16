@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from django.core.exceptions import ValidationError
 class DeviceGroup(models.Model):
     name=models.CharField(max_length=100,unique=True)
@@ -182,6 +183,9 @@ class ImportCleanup(models.Model):
     data=models.JSONField(default=dict)
 
 class PublicLink(models.Model):
+    access_count=models.PositiveBigIntegerField(default=0)
+    last_access_at=models.DateTimeField(null=True,blank=True)
+    access_tracking_since=models.DateTimeField(default=timezone.now)
     label=models.CharField(max_length=100)
     digest=models.CharField(max_length=64,unique=True)
     camera=models.ForeignKey(Camera,null=True,blank=True,on_delete=models.PROTECT)

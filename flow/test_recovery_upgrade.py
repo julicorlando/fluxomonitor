@@ -56,6 +56,8 @@ class AnchoredRecoveryTests(TestCase):
             return page
         fetch.side_effect=changing;job=self.job();import_batch(job.pk);job.refresh_from_db()
         self.assertEqual(job.recovery_mode,'full');self.assertEqual(job.status,'pending');self.assertEqual(Reading.objects.count(),2)
+        from .models import DailyReport
+        self.assertEqual(DailyReport.objects.get(day=self.day-timedelta(days=1)).data['totals']['entries'],1)
     @patch('flow.history_pull.fetch')
     def test_offset_mode_has_same_anchor_guards(self,fetch):
         self.cp['index_mode']='offset';self.cp['offset']=1;self.state.index_mode='offset';self.state.offset=3;self.state.save()

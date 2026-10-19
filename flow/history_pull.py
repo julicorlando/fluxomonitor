@@ -96,6 +96,9 @@ def import_batch(job_id):
             left=fetch(camera,cp['last_id'] if job.index_mode=='id' else cp['offset']-1,1)
             right=fetch(camera,job.target_offset-1,1) if job.target_offset>job.first_offset else left
             if not left or left[0]!=cp['last_event'] or not right or right[0]!=job.end_anchor:
+                # The inserted events are retained and must also refresh past-day summaries.
+                for day in days:
+                    if day<timezone.now().astimezone(ZONE).date():close_day(day,reason=f'Importação histórica #{job.pk}; validação pendente')
                 fallback_full(job,'Validação final das âncoras falhou; varredura completa necessária.');return
         now=timezone.now()
         if job.rate_at and (now-job.rate_at).total_seconds()>=5:

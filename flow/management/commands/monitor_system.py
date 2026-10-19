@@ -1,6 +1,6 @@
 import logging,time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.request import urlopen
+from urllib.request import urlopen,Request
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections,connections
 from flow.notifications import scan_system,dispatch_notices,notice,resolve,pulse,runtime_failure
@@ -29,7 +29,7 @@ class Command(BaseCommand):
                 except Exception as error:
                     logging.exception('Falha no monitor de ocorrências');runtime_failure('scan_system',error)
                 try:
-                    with urlopen('http://web:8000/health/',timeout=5) as response:
+                    with urlopen(Request('http://web:8000/health/',headers={'Host':'localhost'}),timeout=5) as response:
                         if response.status!=200:raise RuntimeError('health')
                     resolve('web-health')
                 except Exception:notice('web-health','Aplicação web indisponível','O monitor não conseguiu consultar a saúde da aplicação web. Verifique o serviço web e a rede interna.')

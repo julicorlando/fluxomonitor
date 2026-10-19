@@ -108,3 +108,17 @@ class NoticeTests(TestCase):
         state=PullCursor.objects.get(camera=camera);self.assertEqual(state.last_error,'')
         self.assertEqual(CollectionGap.objects.get().state,'waiting')
         self.assertTrue(SystemNotice.objects.filter(key='runtime:collector-recovery').exists())
+
+    @patch('flow.management.commands.monitor_system.recovery_pass')
+    @patch('flow.management.commands.monitor_system.scan_system')
+    @patch('flow.management.commands.monitor_system.dispatch_notices')
+    @patch('flow.management.commands.monitor_system.urlopen')
+    def test_internal_health_uses_allowed_host_without_false_alarm(self,open_url,dispatch,scan,recovery):
+        open_url.return_value.__enter__.return_value.status=200
+        with patch('flow.management.commands.monitor_system.notice') as alert:
+            call_command('monitor_system',once=True)
+            alert.assert_not_called()
+        req=open_url.call_args.args[0]
+        self.assertEqual(req.get_header('Host'),'localhost')
+        with self.settings(ALLOWED_HOSTS=['localhost']):
+            self.assertEqual(self.client.get('/health/',HTTP_HOST=req.get_header('Host')).status_code,200)

@@ -1,0 +1,27 @@
+name: GesTi external monitor
+on:
+  schedule:
+    - cron: '3-58/5 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gesti-external-monitor.yml'
+      - 'monitor/external_watch.py'
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: gesti-external-monitor
+  cancel-in-progress: false
+jobs:
+  availability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check public health and record incident
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 monitor/external_watch.py

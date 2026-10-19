@@ -1,3 +1,4 @@
+import logging
 from django.core.management.base import BaseCommand
 class Command(BaseCommand):
     def handle(self,*a,**kw):
@@ -5,7 +6,9 @@ class Command(BaseCommand):
         from flow.reliability import process_recoveries
         from flow.whatsapp import scheduled_send
         # Queue recovery before the message verifier inspects pending work.
-        process_recoveries()
-        monitor_devices()
-        scheduled_send()
-        generate_summaries()
+        # Independent stages: verification still blocks unconfirmed totals,
+        # but an unrelated recovery/alert failure must not stop scheduling.
+        for task in (process_recoveries,monitor_devices,scheduled_send,generate_summaries):
+            try:task()
+            except Exception:
+                logging.getLogger(__name__).exception('Falha na etapa %s do ciclo de fechamento',task.__name__)

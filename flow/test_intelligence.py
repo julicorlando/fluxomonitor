@@ -3,6 +3,9 @@ from pathlib import Path
 from datetime import date,datetime,time,timedelta
 from unittest.mock import patch,MagicMock
 from django.test import TestCase,Client
+from django.test.utils import CaptureQueriesContext
+from django.db import connection
+from django.core.management import call_command
 from django.contrib.auth.models import User
 from django.utils import timezone
 from .models import Camera,Reading,RawDelivery,PullCursor,HistoryImport,CollectionGap,ReportRevision,BackupRun,DeviceAlert,OpeningHours,CalendarException
@@ -18,6 +21,15 @@ class ReliabilityTests(TestCase):
     def event(self,day,clock=time(10),entries=1,exits=0,camera=None):
         camera=camera or self.camera;raw=RawDelivery.objects.create(camera=camera,payload={})
         return Reading.objects.create(camera=camera,event_id=f'pfc-event:{raw.pk}',timestamp=datetime.combine(day,clock,ZONE),entries=entries,exits=exits,mode='delta',raw=raw)
+    def test_recovery_locks_gap_without_nullable_outer_join(self):
+        gap=CollectionGap.objects.create(camera=self.camera,started_at=self.now-timedelta(minutes=5),ended_at=self.now,state='waiting')
+        with CaptureQueriesContext(connection) as queries:process_recoveries(self.now)
+        selects=[q['sql'] for q in queries if q['sql'].lstrip().upper().startswith('SELECT') and 'flow_collectiongap' in q['sql']]
+        self.assertTrue(selects)
+        self.assertFalse(any('OUTER JOIN' in sql.upper() for sql in selects))
+        gap.refresh_from_db();self.assertEqual(gap.state,'queued')
+        process_recoveries(self.now);self.assertEqual(HistoryImport.objects.count(),1)
+
     def test_quiet_success_does_not_queue_recovery_and_real_failure_does_once(self):
         observe_collection(self.camera,True,self.now-timedelta(seconds=5),self.now)
         self.assertEqual(CollectionGap.objects.count(),0)
@@ -157,3 +169,17 @@ class BackupWorkerTests(TestCase):
                 self.assertFalse(worker.perform(4,admin,Path(folder)))
                 calls=str(admin.cursor.return_value.__enter__.return_value.execute.call_args_list)
                 self.assertNotIn('secret password',calls);self.assertNotIn("status='verified'",calls)
+
+class ClosingCycleTests(TestCase):
+    @patch('flow.operations.generate_summaries')
+    @patch('flow.whatsapp.scheduled_send')
+    @patch('flow.operations.monitor_devices')
+    @patch('flow.reliability.process_recoveries')
+    def test_recovery_failure_does_not_prevent_verified_scheduler(self,recovery,monitor,send,summaries):
+        recovery.side_effect=RuntimeError('recovery failed')
+        monitor.side_effect=RuntimeError('monitor failed')
+        # Name is used only for structured logs; mocks emulate real tasks.
+        for mock,name in [(recovery,'process_recoveries'),(monitor,'monitor_devices'),(send,'scheduled_send'),(summaries,'generate_summaries')]:mock.__name__=name
+        with self.assertLogs('flow.management.commands.close_days',level='ERROR') as logs:call_command('close_days')
+        recovery.assert_called_once();monitor.assert_called_once();send.assert_called_once();summaries.assert_called_once()
+        self.assertEqual(len(logs.output),2)

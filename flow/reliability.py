@@ -30,7 +30,9 @@ def process_recoveries(now=None):
         with transaction.atomic():
             candidate=CollectionGap.objects.get(pk=ident)
             camera=Camera.objects.select_for_update().get(pk=candidate.camera_id)
-            gap=CollectionGap.objects.select_for_update().select_related('job').get(pk=ident)
+            # A nullable job produces an outer join, which PostgreSQL cannot lock.
+            # Lock the gap row itself; its optional job is read separately.
+            gap=CollectionGap.objects.select_for_update().get(pk=ident)
             if not camera.enabled:continue
             start=gap.started_at.astimezone(ZONE).date();end=(gap.ended_at or now).astimezone(ZONE).date()
             # A manual re-scan can clear a review only if its buffer snapshot was

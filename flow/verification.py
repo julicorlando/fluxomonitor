@@ -1,7 +1,7 @@
 """Fail-closed verification of a point-in-time PFC total before WhatsApp."""
 import hashlib,json,os,time
 from datetime import timedelta
-from django.db import transaction
+from django.db import transaction,connection
 from django.utils import timezone
 from .models import Camera,HistoryImport,PullCursor,Reading,AuditLog,ImportCleanup,CollectionGap
 from .pfc_pull import poll,mirror
@@ -9,12 +9,14 @@ from .services import report,bounds,ZONE
 
 class VerificationError(ValueError):pass
 
-def verified_total(day):
+def verified_total(day,*,lock_timeout_ms=None):
     started=time.monotonic()
     configured={ip.strip() for ip in os.getenv('PFC_PULL_IPS','').split(',') if ip.strip()}
     if not configured or not os.getenv('PFC_SERVICE_SECRET'):
         raise VerificationError('Consulta direta dos equipamentos não configurada')
     with transaction.atomic():
+        if lock_timeout_ms is not None and connection.vendor=='postgresql':
+            with connection.cursor() as cursor:cursor.execute("SET LOCAL lock_timeout = '3000ms'")
         devices=list(Camera.objects.select_for_update().filter(enabled=True).order_by('ip','replica_slot','id'))
         included=[c for c in devices if c.include_in_total]
         if not included:raise VerificationError('Nenhum dispositivo incluído na soma')

@@ -85,9 +85,10 @@ def poll(camera):
         state,_=PullCursor.objects.get_or_create(camera=camera)
         if state.initialized and state.last_id is not None and state.offset:
             anchor=fetch(camera,state.last_id if state.index_mode=='id' else state.offset-1,1)
-            if not anchor or anchor[0]['idIndex']!=state.last_id:state.initialized=False
+            if not anchor or anchor[0]['idIndex']!=state.last_id or state.last_event and anchor[0]!=state.last_event:state.initialized=False
+            elif not state.last_event:state.last_event=anchor[0]
         if not state.initialized:
-            state.offset,state.index_mode=locate_today(camera);state.last_id=None;state.initialized=True
+            state.offset,state.index_mode=locate_today(camera);state.last_id=None;state.last_event=None;state.initialized=True
         events=fetch(camera,state.offset,100)
         if events and state.index_mode=="id" and events[0]["idIndex"]<state.offset:raise ProtocolError("Evento anterior ao cursor; avanço bloqueado")
         now=timezone.now()
@@ -102,7 +103,7 @@ def poll(camera):
                     reading,created=Reading.objects.get_or_create(camera=camera,event_id=f"pfc-event:{e['idIndex']}",defaults=defaults)
                     if not created and (reading.timestamp!=stamp or reading.entries!=defaults['entries'] or reading.exits!=defaults['exits']):raise ProtocolError('idIndex reutilizado com evento diferente; coleta bloqueada')
                     if created:changed_days.add(stamp.astimezone(ZONE).date())
-                state.last_id=e['idIndex']
+                state.last_id=e['idIndex'];state.last_event=e
             state.offset=state.last_id+1 if state.index_mode=='id' else state.offset+len(events)
         state.last_success=now;state.last_error='';state.save()
         camera.last_seen=now;camera.save(update_fields=['last_seen'])
@@ -124,7 +125,7 @@ def mirror(source,target):
             Reading.objects.create(camera=target,event_id=reading.event_id,timestamp=reading.timestamp,entries=reading.entries,exits=reading.exits,mode=reading.mode,counter_epoch=reading.counter_epoch,raw=raw_map[reading.raw_id])
             days.add(reading.timestamp.astimezone(ZONE).date());count+=1
         state=PullCursor.objects.get(camera=source)
-        PullCursor.objects.update_or_create(camera=target,defaults={'offset':state.offset,'last_id':state.last_id,'index_mode':state.index_mode,'initialized':state.initialized,'last_success':state.last_success,'last_error':''})
+        PullCursor.objects.update_or_create(camera=target,defaults={'offset':state.offset,'last_id':state.last_id,'index_mode':state.index_mode,'initialized':state.initialized,'last_success':state.last_success,'last_error':'','last_event':state.last_event})
         target.last_seen=source.last_seen;target.save(update_fields=['last_seen'])
         for day in days:
             if day<timezone.now().astimezone(ZONE).date():close_day(day,reason='Sincronização da réplica')

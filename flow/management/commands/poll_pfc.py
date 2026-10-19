@@ -13,21 +13,23 @@ def collect_group(cameras):
     sources={};resumed=False;success=True
     for camera in sorted(cameras,key=lambda c:(c.replica_slot,c.pk)):
         close_old_connections()
-        previous_success=PullCursor.objects.filter(camera=camera).values_list('last_success',flat=True).first()
+        previous=PullCursor.objects.filter(camera=camera).values('last_success','initialized','offset','index_mode','last_id','last_event').first()
+        previous_success=previous['last_success'] if previous else None
+        checkpoint={k:v for k,v in (previous or {}).items() if k!='last_success'}
         try:
             if camera.ip in sources:
                 count=mirror(sources[camera.ip],camera)
             else:
                 if source_for(camera).pk!=camera.pk:raise ValueError('Equipamento original indisponível; réplica aguarda sincronização')
                 count=poll(camera)
-                resumed=observe_collection(camera,True,previous_success) or resumed
+                resumed=observe_collection(camera,True,previous_success,checkpoint=checkpoint) or resumed
                 camera.refresh_from_db(fields=['last_seen']);sources[camera.ip]=camera
             logging.info('%s: %s eventos consultados',camera.ip,count)
         except Exception as error:
             success=False;close_old_connections()
             message=str(error)[:250] if isinstance(error,ValueError) else type(error).__name__
             PullCursor.objects.update_or_create(camera=camera,defaults={'last_error':message})
-            observe_collection(camera,False,previous_success)
+            observe_collection(camera,False,previous_success,checkpoint=checkpoint)
             payload=getattr(error,'payload',None)
             if payload is not None:
                 previous=RawDelivery.objects.filter(camera=camera).order_by('-id').first()

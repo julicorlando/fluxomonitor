@@ -4,7 +4,7 @@ from datetime import timedelta,datetime,time
 from urllib.error import HTTPError
 from django.db import transaction
 from django.utils import timezone
-from .models import NotificationConfig,SystemNotice,ServicePulse,CollectionGap,HistoryImport,BackupRun,WhatsAppConfig,WhatsAppDelivery,PullCursor,Camera
+from .models import NotificationConfig,SystemNotice,ServicePulse,CollectionGap,HistoryImport,BackupRun,WhatsAppConfig,WhatsAppDelivery,PullCursor,Camera,NoticeBatch
 from .services import ZONE
 
 log=logging.getLogger(__name__)
@@ -20,7 +20,10 @@ def resolve(key,now=None):
     try:
         with transaction.atomic():
             pending=SystemNotice.objects.filter(key=key,resolved_at__isnull=True)
-            if pending.exists():pending.update(resolved_at=now or timezone.now())
+            for item in pending:
+                item.resolved_at=now or timezone.now()
+                if item.status=='accepted':item.recovery_status='pending';item.next_attempt=now or timezone.now()
+                item.save(update_fields=['resolved_at','recovery_status','next_attempt'])
     except Exception:log.exception('Não foi possível atualizar a resolução do aviso')
 
 def notice(key,title,reason,now=None):
@@ -32,7 +35,7 @@ def notice(key,title,reason,now=None):
         item=SystemNotice.objects.select_for_update().get(pk=item.pk)
         item.last_seen=now;item.title=title[:150];item.reason=reason[:700]
         if item.resolved_at:
-            item.resolved_at=None;item.first_seen=now;item.status='pending';item.attempts=0;item.attempted_at=None;item.accepted_at=None;item.next_attempt=now;item.text='';item.delivery_detail=''
+            item.resolved_at=None;item.first_seen=now;item.status='pending';item.attempts=0;item.attempted_at=None;item.accepted_at=None;item.next_attempt=now;item.text='';item.delivery_detail='';item.recovery_status='';item.recovery_notified_at=None
         item.save()
     return item
 
@@ -72,6 +75,10 @@ def scan_system(now=None):
             detail=(state.last_error if state and state.last_error else gap.detail or gap.state_label)
             # Protocol errors are generated internally; omit unknown exception bodies.
             detail=detail[:180] if not re.search(r'https?://|sign|token|secret|password',detail,re.I) else 'Falha de consulta; consulte o diagnóstico'
+            active=gaps.filter(job__status='running').select_related('job').first()
+            if active:
+                job=active.job;detail+=f' · Reexame #{job.pk}: {job.progress if job.progress is not None else 0}%'
+                if job.eta_seconds is not None:detail+=f', previsão aproximada {max(1,round(job.eta_seconds/60))} min'
             notice(key,'Falha no contador '+camera.name,f'{camera.name} ({camera.ip}). Motivo: {detail}. Início: {gap.started_at.astimezone(ZONE):%d/%m/%Y %H:%M}. {gaps.count()} interrupção(ões) ainda aguardando reexame completo.',now)
         else:resolve(key,now)
     for job in HistoryImport.objects.filter(status='failed',updated_at__gte=since).select_related('camera'):
@@ -108,44 +115,77 @@ def scan_system(now=None):
 def dispatch_notices(now=None):
     now=now or timezone.now();cfg=active_config()
     if not cfg:return
-    # A crashed sender is uncertain; never automatically duplicate its POST.
-    SystemNotice.objects.filter(status='sending',attempted_at__lt=now-timedelta(minutes=2)).update(status='unknown',delivery_detail='Processo interrompido durante o envio; resultado incerto. Confira no destinatário.')
-    due=SystemNotice.objects.filter(status='pending',next_attempt__lte=now).order_by('first_seen','pk')
-    if not due.exists():return
-    from .whatsapp import session_info,gateway
+    SystemNotice.objects.filter(status='sending',attempted_at__lt=now-timedelta(minutes=2)).update(status='unknown',delivery_detail='Processo interrompido durante envio; resultado incerto. Confira no destinatário.')
+    SystemNotice.objects.filter(recovery_status='sending',attempted_at__lt=now-timedelta(minutes=2)).update(recovery_status='unknown')
+    NoticeBatch.objects.filter(status='sending',created_at__lt=now-timedelta(minutes=2)).update(status='unknown',detail='Processo interrompido; sem reenvio automático.')
+    from .whatsapp import session_info
     try:working=session_info().get('status')=='WORKING'
     except Exception:working=False
     if not working:
-        due.update(next_attempt=now+timedelta(seconds=60),delivery_detail='WhatsApp indisponível; aviso aguardando reconexão.')
+        SystemNotice.objects.filter(status='pending',next_attempt__lte=now).update(next_attempt=now+timedelta(seconds=60),delivery_detail='WhatsApp indisponível; aviso aguardando reconexão.')
         return
-    for ident in list(due.values_list('pk',flat=True)[:3]):
-        with transaction.atomic():
-            locked=NotificationConfig.objects.select_for_update().get(pk=1)
-            if not locked.enabled or not re.fullmatch(r'[1-9][0-9]{7,14}',locked.recipient):return
-            item=SystemNotice.objects.select_for_update().get(pk=ident)
-            if item.status!='pending' or item.next_attempt>now:continue
-            # Resolved incidents still notify what happened, with explicit current state.
-            text=f'*GesTi · ALERTA AUTOMÁTICO*\n\n{item.title}\n{item.reason}\nDetectado em: {item.first_seen.astimezone(ZONE):%d/%m/%Y %H:%M} (Brasília).'
-            if item.resolved_at:text+='\nSituação atual: ocorrência resolvida; aviso emitido após a reconexão.'
-            item.recipient=locked.recipient+'@c.us';item.text=text;item.status='sending';item.attempted_at=now;item.attempts+=1;item.save()
-        try:
-            gateway('POST','/api/sendText',{'session':'default','chatId':item.recipient,'text':item.text})
-            item.status='accepted';item.accepted_at=timezone.now();item.delivery_detail='Aceito pelo gateway; entrega no celular não confirmada.'
-        except HTTPError as exc:
-            if exc.code in (401,403,429):
-                item.status='pending';item.next_attempt=now+timedelta(minutes=min(60,2**min(item.attempts,6)))
-                item.delivery_detail=f'Gateway recusou o aviso (HTTP {exc.code}); nova tentativa programada.'
-            else:
-                item.status='unknown';item.delivery_detail=f'Gateway respondeu HTTP {exc.code}; resultado não confirmado. Confira no destinatário antes de repetir.'
-        except Exception:
-            item.status='unknown';item.delivery_detail='Resultado incerto; sem repetição automática para evitar duplicidade. Confira no destinatário.'
-        item.save(update_fields=['status','accepted_at','next_attempt','delivery_detail'])
+    for phase in ('problem','recovered','digest'):
+        dispatch_bundle(phase,now)
+
+
+def dispatch_bundle(phase,now):
+    from .whatsapp import gateway
+    with transaction.atomic():
+        cfg=NotificationConfig.objects.select_for_update().get(pk=1)
+        if not cfg.enabled or not re.fullmatch(r'[1-9][0-9]{7,14}',cfg.recipient):return
+        if phase=='problem':qs=SystemNotice.objects.filter(status='pending',next_attempt__lte=now)
+        elif phase=='recovered':qs=SystemNotice.objects.filter(recovery_status='pending',resolved_at__isnull=False,next_attempt__lte=now)
+        else:
+            if cfg.last_digest_at and now-cfg.last_digest_at<timedelta(minutes=max(15,cfg.digest_minutes)):return
+            qs=SystemNotice.objects.filter(status='accepted',resolved_at__isnull=True)
+        title={'problem':'RESUMO DE ALERTAS','recovered':'SITUAÇÃO NORMALIZADA','digest':'ANDAMENTO DAS PENDÊNCIAS'}[phase]
+        text=f'*GesTi · {title}*\n{now.astimezone(ZONE):%d/%m/%Y %H:%M} (Brasília)\n'
+        selected=[]
+        for item in qs.select_for_update().order_by('first_seen','pk')[:20]:
+            part=f'\n• {item.title}\n{item.reason}'
+            if item.resolved_at:part+='\nSituação atual: ocorrência resolvida.'
+            if len(text)+len(part)>3500:break
+            text+=part;selected.append(item)
+        if not selected:return
+        refs=[{'id':i.pk,'epoch':i.first_seen.isoformat(),'phase':phase,'resolved_in_message':bool(i.resolved_at)} for i in selected]
+        batch=NoticeBatch.objects.create(phase=phase,references=refs,recipient=cfg.recipient+'@c.us',text=text,created_at=now)
+        if phase in ('problem','digest'):cfg.last_digest_at=now;cfg.save(update_fields=['last_digest_at'])
+        for item in selected:
+            if phase=='problem':item.status='sending'
+            elif phase=='recovered':item.recovery_status='sending'
+            item.attempted_at=now;item.attempts+=1;item.recipient=batch.recipient;item.text=text;item.save()
+    retry=False
+    try:
+        gateway('POST','/api/sendText',{'session':'default','chatId':batch.recipient,'text':batch.text})
+        batch.status='accepted';batch.accepted_at=timezone.now();batch.detail='Aceito pelo gateway; entrega no celular não confirmada.'
+    except HTTPError as error:
+        retry=error.code in (401,403,429)
+        batch.status='rejected' if retry else 'unknown';batch.detail=f'Gateway respondeu HTTP {error.code}.'
+    except Exception:
+        batch.status='unknown';batch.detail='Resultado incerto; sem repetição automática para evitar duplicidade. Confira no destinatário.'
+    batch.save(update_fields=['status','accepted_at','detail'])
+    for ref in refs:
+        fields={'delivery_detail':batch.detail}
+        state='accepted' if batch.status=='accepted' else 'pending' if retry else 'unknown'
+        if phase=='problem':
+            fields['status']=state
+            if state=='accepted':
+                fields['accepted_at']=batch.accepted_at
+                if ref.get('resolved_in_message'):fields['recovery_status']='accepted';fields['recovery_notified_at']=batch.accepted_at
+        elif phase=='recovered':
+            fields['recovery_status']=state
+            if state=='accepted':fields['recovery_notified_at']=batch.accepted_at
+        if retry:fields['next_attempt']=now+timedelta(minutes=5)
+        current=SystemNotice.objects.filter(pk=ref['id'],first_seen=ref['epoch'])
+        current.update(**fields)
+        if phase=='problem' and state=='accepted' and not ref.get('resolved_in_message'):
+            current.filter(resolved_at__isnull=False,recovery_status='').update(recovery_status='pending',next_attempt=now)
 
 class ErrorNoticeMiddleware:
     def __init__(self,get_response):self.get_response=get_response
     def __call__(self,request):
         response=self.get_response(request)
-        if response.status_code>=500:
+        if response.status_code>=500 and request.path!='/health/monitor/':
             route=getattr(getattr(request,'resolver_match',None),'route',None) or 'rota não identificada'
             safe_notice('web:'+route,'Erro na aplicação web',f'Uma requisição à rota {route} terminou com HTTP {response.status_code}. Consulte os logs da aplicação.')
         return response

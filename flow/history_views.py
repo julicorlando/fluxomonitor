@@ -81,7 +81,7 @@ def imports(request):
                         job.status='pending';job.initialized=False;job.offset=0
                         job.scanned=0;job.imported=0;job.last_timestamp=None
                         job.first_offset=None;job.target_offset=None;job.snapshot_at=None
-                        job.earliest_available=None;job.error='';job.save()
+                        job.earliest_available=None;job.error='';job.recovery_mode='full';job.checkpoint={};job.end_anchor={};job.rate_at=None;job.rate_per_second=None;job.save()
                         AuditLog.objects.create(actor=request.user.get_username(),action='history_retry',object_type='HistoryImport',object_id=str(job.pk),changes={})
             return redirect('/imports/')
         if request.POST.get('action')=='cancel':
@@ -108,6 +108,6 @@ def imports(request):
 @user_passes_test(lambda u:u.is_staff)
 def progress(request):
     jobs=HistoryImport.objects.exclude(status='archived').order_by('-id')[:50]
-    response=JsonResponse({'jobs':[{'id':j.pk,'status':j.status,'progress':j.progress,'scanned':j.scanned,'imported':j.imported,'error':j.error,'updated_at':j.updated_at.isoformat(),'last_timestamp':j.last_timestamp.isoformat() if j.last_timestamp else None,'earliest_available':j.earliest_available.isoformat() if j.earliest_available else None} for j in jobs]})
+    response=JsonResponse({'jobs':[{'id':j.pk,'mode':j.recovery_label,'fallback_reason':j.fallback_reason,'eta_seconds':j.eta_seconds,'rate':j.rate_per_second,'status':j.status,'progress':j.progress,'scanned':j.scanned,'imported':j.imported,'error':j.error,'updated_at':j.updated_at.isoformat(),'last_timestamp':j.last_timestamp.isoformat() if j.last_timestamp else None,'earliest_available':j.earliest_available.isoformat() if j.earliest_available else None} for j in jobs]})
     response['Cache-Control']='no-store'
     return response

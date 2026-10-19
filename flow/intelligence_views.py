@@ -5,7 +5,7 @@ from django.db import transaction
 from django.http import HttpResponseBadRequest
 from django.shortcuts import render,redirect
 from django.utils import timezone
-from .models import CollectionGap,ReportRevision,BackupRun,AuditLog
+from .models import CollectionGap,ReportRevision,BackupRun,AuditLog,PreflightCheck
 from .services import ZONE
 from .intelligence import day_check,comparable_analysis,flow_month,weekly_executive
 
@@ -30,7 +30,7 @@ def checks(request):
             except VerificationError as error:messages.error(request,str(error))
             except Exception:messages.error(request,'Conferência não concluída. Verifique comunicação e importações.')
         return redirect('/checks/?date='+str(day))
-    response=render(request,'checks.html',{'check':day_check(day),'day':day,'gaps':CollectionGap.objects.select_related('camera','job').order_by('-id')[:50],'revisions':ReportRevision.objects.filter(day=day).order_by('-id')[:50]})
+    response=render(request,'checks.html',{'check':day_check(day),'day':day,'gaps':CollectionGap.objects.select_related('camera','job').order_by('-id')[:50],'preflights':PreflightCheck.objects.filter(day=day).order_by('scheduled_time'),'revisions':ReportRevision.objects.filter(day=day).order_by('-id')[:50]})
     response['Cache-Control']='private, no-store';return response
 
 @login_required

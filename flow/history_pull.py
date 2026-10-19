@@ -4,6 +4,7 @@ from django.utils import timezone
 from .models import Camera,HistoryImport,Reading,RawDelivery,NativeWindow
 from .pfc_pull import fetch,ProtocolError
 from .services import ZONE,close_day
+from .reliability import valid_checkpoint
 
 def find_end(camera,base):
     """Find an exclusive index bound without assuming timestamp order."""
@@ -26,6 +27,21 @@ def import_batch(job_id):
         if job.status not in ('pending','running'):return
         if not camera.enabled:raise ProtocolError('Dispositivo desativado')
         if NativeWindow.objects.filter(camera=camera).exists() or Reading.objects.filter(camera=camera).exclude(event_id__startswith='pfc-event:').exists():raise ProtocolError('Outra fonte de contagem existente; não misturar fontes')
+        if job.recovery_mode=='tail':
+            cp=job.checkpoint
+            state=camera.pullcursor if hasattr(camera,'pullcursor') else None
+            valid=valid_checkpoint(cp) and state and state.initialized and state.index_mode==cp['index_mode'] and state.offset>=cp['offset']
+            anchor=fetch(camera,cp['last_id'] if cp.get('index_mode')=='id' else cp.get('offset',1)-1,1) if valid else []
+            if not valid or not anchor or anchor[0]!=cp['last_event']:
+                fallback_full(job,'Ponto anterior ausente ou alterado; varredura completa necessária.');return
+            if not job.initialized:
+                job.index_mode=cp['index_mode'];job.offset=cp['offset'];job.first_offset=job.offset
+                first=fetch(camera,job.offset,1)
+                job.target_offset=find_end(camera,job.offset) if first else job.offset
+                end_page=fetch(camera,job.target_offset-1,1) if first else [cp['last_event']]
+                if not end_page:fallback_full(job,'Limite final não confirmado; varredura completa necessária.');return
+                job.end_anchor=end_page[0]
+                job.snapshot_at=timezone.now();job.initialized=True
         if not job.initialized:
             # Determine pagination without searching by timestamps: clocks in
             # retained records are not guaranteed to be monotonic.
@@ -54,6 +70,8 @@ def import_batch(job_id):
         else:events=events[:max(0,job.target_offset-job.offset)]
         start=datetime.combine(job.start,time.min,tzinfo=ZONE)
         end=datetime.combine(job.end+timedelta(days=1),time.min,tzinfo=ZONE)
+        if job.recovery_mode=='tail' and not events and job.offset<job.target_offset:
+            fallback_full(job,'Trecho indisponível antes do limite esperado; varredura completa necessária.');return
         if events and job.index_mode=='id' and events[0]['idIndex']<job.offset:raise ProtocolError('Resposta anterior ao cursor histórico')
         raw=None;days=set();job.status='running'
         for event in events:
@@ -61,7 +79,7 @@ def import_batch(job_id):
             job.scanned+=1;job.last_timestamp=stamp
             # Continue past records outside the range: a later ID can carry an
             # earlier timestamp after a device clock adjustment.
-            if start<=stamp<end:
+            if job.recovery_mode=='tail' or start<=stamp<end:
                 if stamp>timezone.now()+timedelta(minutes=5):raise ProtocolError('Relógio da câmera no futuro')
                 if raw is None:raw=RawDelivery.objects.create(camera=camera,payload={'source':'pfc-history','job_id':job.pk,'events':events},status='pull_history')
                 if event['eventType'] in (0,1):
@@ -73,6 +91,24 @@ def import_batch(job_id):
             job.offset=events[-1]['idIndex']+1 if job.index_mode=='id' else job.offset+len(events)
         else:job.status='completed'
         if job.offset>=job.target_offset:job.status='completed'
+        if job.status=='completed' and job.recovery_mode=='tail':
+            cp=job.checkpoint
+            left=fetch(camera,cp['last_id'] if job.index_mode=='id' else cp['offset']-1,1)
+            right=fetch(camera,job.target_offset-1,1) if job.target_offset>job.first_offset else left
+            if not left or left[0]!=cp['last_event'] or not right or right[0]!=job.end_anchor:
+                fallback_full(job,'Validação final das âncoras falhou; varredura completa necessária.');return
+        now=timezone.now()
+        if job.rate_at and (now-job.rate_at).total_seconds()>=5:
+            speed=max(0,(job.offset-job.rate_offset)/(now-job.rate_at).total_seconds())
+            job.rate_per_second=speed if not job.rate_per_second else 0.3*speed+0.7*job.rate_per_second
+            job.rate_at=now;job.rate_offset=job.offset
+        elif job.rate_at is None:job.rate_at=now;job.rate_offset=job.offset
         job.error='';job.save()
         for day in days:
             if day<timezone.now().astimezone(ZONE).date():close_day(day,reason=f'Importação histórica #{job.pk}')
+
+
+def fallback_full(job,reason):
+    # Previously inserted events stay deduplicated; no stored counts are removed.
+    job.recovery_mode='full';job.checkpoint={};job.end_anchor={};job.fallback_reason=reason
+    job.initialized=False;job.first_offset=None;job.target_offset=None;job.snapshot_at=None;job.offset=0;job.scanned=0;job.imported=0;job.last_timestamp=None;job.rate_at=None;job.rate_per_second=None;job.status='pending';job.error='';job.save()

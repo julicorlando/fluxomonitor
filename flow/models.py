@@ -148,6 +148,7 @@ class NativeWindow(models.Model):
         constraints=[models.UniqueConstraint(fields=['camera','end_time'],name='unique_native_window')]
 
 class PullCursor(models.Model):
+    last_event=models.JSONField(null=True,blank=True)
     index_mode=models.CharField(max_length=10,default="offset")
     camera=models.OneToOneField(Camera,on_delete=models.CASCADE)
     offset=models.BigIntegerField(default=0)
@@ -157,6 +158,15 @@ class PullCursor(models.Model):
     last_error=models.CharField(max_length=250,blank=True)
 
 class HistoryImport(models.Model):
+    automatic=models.BooleanField(default=False)
+    recovery_mode=models.CharField(max_length=10,default='full')
+    checkpoint=models.JSONField(default=dict,blank=True)
+    end_anchor=models.JSONField(default=dict,blank=True)
+    fallback_reason=models.CharField(max_length=250,blank=True)
+    rate_at=models.DateTimeField(null=True,blank=True)
+    rate_offset=models.BigIntegerField(default=0)
+    rate_per_second=models.FloatField(null=True,blank=True)
+
     snapshot_at=models.DateTimeField(null=True,blank=True)
     first_offset=models.BigIntegerField(null=True,blank=True)
     target_offset=models.BigIntegerField(null=True,blank=True)
@@ -174,6 +184,13 @@ class HistoryImport(models.Model):
     error=models.CharField(max_length=250,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
     updated_at=models.DateTimeField(auto_now=True)
+    @property
+    def eta_seconds(self):
+        if self.status!='running' or not self.rate_per_second or self.rate_per_second<=0 or self.target_offset is None:return None
+        if (timezone.now()-self.updated_at).total_seconds()>60:return None
+        return max(0,round((self.target_offset-self.offset)/self.rate_per_second))
+    @property
+    def recovery_label(self):return 'Trecho com validação de âncoras' if self.recovery_mode=='tail' else 'Varredura completa'
     @property
     def progress(self):
         if self.status=='completed':return 100
@@ -210,6 +227,7 @@ class AccessMap(models.Model):
     updated_at=models.DateTimeField(auto_now=True)
 
 class CollectionGap(models.Model):
+    checkpoint=models.JSONField(default=dict,blank=True)
     camera=models.ForeignKey(Camera,on_delete=models.PROTECT)
     started_at=models.DateTimeField()
     ended_at=models.DateTimeField(null=True,blank=True)
@@ -249,6 +267,8 @@ class BackupRun(models.Model):
         return {'pending':'Aguardando execução','running':'Em execução','verified':'Restaurado e conferido','failed':'Não concluído','retained_log':'Cópia expirada; registro mantido'}.get(self.status,self.status)
 
 class NotificationConfig(models.Model):
+    last_digest_at=models.DateTimeField(null=True,blank=True)
+    digest_minutes=models.PositiveSmallIntegerField(default=30)
     enabled=models.BooleanField(default=False)
     recipient=models.CharField(max_length=15,blank=True)
     activated_at=models.DateTimeField(null=True,blank=True)
@@ -258,6 +278,8 @@ class ServicePulse(models.Model):
     checked_at=models.DateTimeField(default=timezone.now)
 
 class SystemNotice(models.Model):
+    recovery_status=models.CharField(max_length=20,blank=True)
+    recovery_notified_at=models.DateTimeField(null=True,blank=True)
     key=models.CharField(max_length=180,unique=True)
     title=models.CharField(max_length=150)
     reason=models.CharField(max_length=700)
@@ -278,3 +300,27 @@ class CommunicationCheck(models.Model):
     started_at=models.DateTimeField(default=timezone.now)
     finished_at=models.DateTimeField(null=True,blank=True)
     result=models.JSONField(default=dict)
+
+class NoticeBatch(models.Model):
+    created_at=models.DateTimeField(default=timezone.now)
+    accepted_at=models.DateTimeField(null=True,blank=True)
+    phase=models.CharField(max_length=15)
+    references=models.JSONField(default=list)
+    recipient=models.CharField(max_length=30)
+    text=models.TextField()
+    status=models.CharField(max_length=20,default='sending')
+    detail=models.CharField(max_length=250,blank=True)
+
+class PreflightCheck(models.Model):
+    day=models.DateField()
+    scheduled_time=models.TimeField()
+    checked_at=models.DateTimeField(default=timezone.now)
+    status=models.CharField(max_length=20,default='checking')
+    reason=models.CharField(max_length=300,blank=True)
+    original_entries=models.BigIntegerField(null=True,blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['day','scheduled_time'],name='unique_preflight_slot')]
+
+class MonitorSnapshot(models.Model):
+    checked_at=models.DateTimeField(default=timezone.now)
+    healthy=models.BooleanField(default=False)

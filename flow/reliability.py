@@ -13,6 +13,7 @@ def observe_collection(camera,success,previous_success=None,now=None):
     now=now or timezone.now()
     source=source_for(camera)
     if not source or source.pk!=camera.pk:return
+    resumed=False
     with transaction.atomic():
         Camera.objects.select_for_update().get(pk=source.pk)
         gap=CollectionGap.objects.filter(camera=source,state='open').first()
@@ -22,7 +23,8 @@ def observe_collection(camera,success,previous_success=None,now=None):
             if not gap:gap=CollectionGap.objects.create(camera=source,started_at=previous_success or now)
         if success and gap:
             gap.ended_at=now;gap.state='waiting';gap.detail='Comunicação restabelecida; aguardando reexame do buffer.'
-            gap.save(update_fields=['ended_at','state','detail'])
+            gap.save(update_fields=['ended_at','state','detail']);resumed=True
+    return resumed
 
 def process_recoveries(now=None):
     now=now or timezone.now();today=now.astimezone(ZONE).date()

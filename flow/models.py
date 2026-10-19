@@ -247,3 +247,28 @@ class BackupRun(models.Model):
     @property
     def status_label(self):
         return {'pending':'Aguardando execução','running':'Em execução','verified':'Restaurado e conferido','failed':'Não concluído','retained_log':'Cópia expirada; registro mantido'}.get(self.status,self.status)
+
+class NotificationConfig(models.Model):
+    enabled=models.BooleanField(default=False)
+    recipient=models.CharField(max_length=15,blank=True)
+    activated_at=models.DateTimeField(null=True,blank=True)
+
+class ServicePulse(models.Model):
+    name=models.CharField(max_length=40,unique=True)
+    checked_at=models.DateTimeField(default=timezone.now)
+
+class SystemNotice(models.Model):
+    key=models.CharField(max_length=180,unique=True)
+    title=models.CharField(max_length=150)
+    reason=models.CharField(max_length=700)
+    first_seen=models.DateTimeField(default=timezone.now)
+    last_seen=models.DateTimeField(default=timezone.now)
+    resolved_at=models.DateTimeField(null=True,blank=True)
+    status=models.CharField(max_length=20,default='pending')
+    attempted_at=models.DateTimeField(null=True,blank=True)
+    next_attempt=models.DateTimeField(default=timezone.now)
+    accepted_at=models.DateTimeField(null=True,blank=True)
+    attempts=models.PositiveIntegerField(default=0)
+    recipient=models.CharField(max_length=30,blank=True)
+    text=models.TextField(blank=True)
+    delivery_detail=models.CharField(max_length=250,blank=True)

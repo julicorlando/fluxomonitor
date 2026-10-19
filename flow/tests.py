@@ -208,7 +208,9 @@ class FlowTests(TestCase):
   now=self.prepare_whatsapp()
   with patch('flow.whatsapp.session_info',return_value={'status':'STOPPED'}),patch('flow.whatsapp.gateway') as send:
    scheduled_send(now-timedelta(minutes=1));scheduled_send(now);scheduled_send(now+timedelta(minutes=11));send.assert_not_called()
-  self.assertEqual(WhatsAppDelivery.objects.count(),0)
+  self.assertEqual(WhatsAppDelivery.objects.count(),1)
+  self.assertEqual(WhatsAppDelivery.objects.get().status,'skipped')
+  self.assertIn('WhatsApp desconectado',WhatsAppDelivery.objects.get().detail)
  def test_whatsapp_admin_page(self):
   from unittest.mock import patch
   from django.contrib.auth.models import User

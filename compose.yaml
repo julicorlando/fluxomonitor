@@ -67,6 +67,14 @@ services:
     depends_on:
       web:
         condition: service_healthy
+  notifier:
+    build: .
+    restart: unless-stopped
+    environment: *env
+    command: ["python", "manage.py", "monitor_system"]
+    depends_on:
+      web:
+        condition: service_healthy
   backup:
     build: ./backup
     restart: unless-stopped

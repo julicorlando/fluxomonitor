@@ -7,6 +7,7 @@ from django.utils import timezone
 from flow.services import ZONE
 from flow.models import HistoryImport,RawDelivery
 from flow.history_pull import import_batch
+from flow.notifications import pulse,runtime_failure,resolve
 
 
 def next_job(ip):
@@ -20,15 +21,18 @@ def run_batch(ip):
     try:
         job=next_job(ip)
         if job:import_batch(job.pk)
+        resolve('runtime:history')
     except Exception as error:
         close_old_connections()
         if job:
             message=str(error)[:250] if isinstance(error,ValueError) else type(error).__name__
             # Never turn an already cancelled/archived job into a failed one.
-            HistoryImport.objects.filter(pk=job.pk,status__in=['pending','running']).update(status='failed',error=message)
+            HistoryImport.objects.filter(pk=job.pk,status__in=['pending','running']).update(status='failed',error=message,updated_at=timezone.now())
             if getattr(error,'payload',None) is not None:RawDelivery.objects.create(camera=job.camera,payload=error.payload,status='pull_format_error')
             logging.error('Importação %s: %s',job.pk,message)
-        else:logging.error('Aguardando banco de dados (%s): %s',ip,type(error).__name__)
+        else:
+            logging.error('Aguardando banco de dados (%s): %s',ip,type(error).__name__)
+            runtime_failure('history',error)
     finally:
         connections.close_all()
 
@@ -45,10 +49,13 @@ class Command(BaseCommand):
                 job=next_job(ip)
                 if job:import_batch(job.pk)
             return
+        last_pulse=0
         with ThreadPoolExecutor(max_workers=max(1,len(ips)),thread_name_prefix='history') as pool:
             running={};ready={ip:0 for ip in ips}
             while True:
                 now=time.monotonic()
+                if now-last_pulse>=30:
+                    pulse('history');last_pulse=now
                 for ip in ips:
                     future=running.get(ip)
                     if future is not None:

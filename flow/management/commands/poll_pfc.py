@@ -3,7 +3,8 @@ from django.core.management.base import BaseCommand,CommandError
 from django.db import close_old_connections
 from flow.models import Camera,PullCursor,RawDelivery
 from flow.pfc_pull import poll,mirror
-from flow.reliability import observe_collection,source_for
+from flow.reliability import observe_collection,source_for,process_recoveries
+from flow.notifications import pulse,runtime_failure,resolve
 
 class Command(BaseCommand):
     help='Consulta eventos PFC com assinatura validada no firmware do equipamento'
@@ -15,6 +16,8 @@ class Command(BaseCommand):
         interval=max(5,int(os.environ.get('PFC_POLL_SECONDS','5')))
         while True:
             started=time.monotonic()
+            pulse('collector')
+            resumed=False
             cameras=list(Camera.objects.filter(enabled=True,ip__in=ips))
             missing=set(ips)-{c.ip for c in cameras}
             if missing:logging.error('IPs ausentes ou desativados: %s',','.join(sorted(missing)))
@@ -28,7 +31,7 @@ class Command(BaseCommand):
                     else:
                         if source_for(camera).pk!=camera.pk:raise ValueError('Equipamento original indisponível; réplica aguarda sincronização')
                         count=poll(camera)
-                        observe_collection(camera,True,previous_success)
+                        resumed=observe_collection(camera,True,previous_success) or resumed
                         camera.refresh_from_db(fields=["last_seen"])
                         sources[camera.ip]=camera
                     self.stdout.write(f'{camera.ip}: {count} eventos consultados',ending='\n')
@@ -44,5 +47,9 @@ class Command(BaseCommand):
                         if not previous or previous.payload!=payload or previous.status!='pull_format_error':
                             RawDelivery.objects.create(camera=camera,payload=payload,status='pull_format_error')
                     logging.error('%s: %s',camera.ip,message)
+            if resumed:
+                try:process_recoveries();resolve('runtime:collector-recovery')
+                except Exception as error:runtime_failure('collector-recovery',error);logging.exception('Falha ao iniciar recuperação após reconexão')
+            pulse('collector')
             if options['once']:return
             time.sleep(max(0,interval-(time.monotonic()-started)))

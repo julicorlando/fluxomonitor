@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.shortcuts import render,redirect
-from django.http import JsonResponse
+from django.http import JsonResponse,HttpResponse
 from .models import OpeningHours,CalendarException,FlowEvent,AuditLog,DeviceAlert,ScheduledSummary
 from .views import access
 class HoursForm(forms.ModelForm):
@@ -52,7 +52,13 @@ def events(request):
 @user_passes_test(lambda u:u.is_superuser)
 def audit(request):return render(request,'audit.html',{'logs':AuditLog.objects.order_by('-id')[:200]})
 @login_required
-def alerts(request):return render(request,'alerts.html',{'alerts':DeviceAlert.objects.select_related('camera').order_by('-opened_at')[:200]})
+def alerts(request):
+    from .notification_views import alert_context
+    context=alert_context(request)
+    if not isinstance(context,dict):return context
+    if request.method=='POST' and not request.user.is_superuser:return HttpResponse('Sem permissão',status=403)
+    response=render(request,'alerts.html',{'alerts':DeviceAlert.objects.select_related('camera').order_by('-opened_at')[:200],**context})
+    response['Cache-Control']='private, no-store';return response
 @login_required
 def summaries(request):return render(request,'summaries.html',{'summaries':ScheduledSummary.objects.order_by('-end','kind')[:100]})
 @login_required

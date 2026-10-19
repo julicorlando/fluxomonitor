@@ -34,7 +34,7 @@ services:
       WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}
       SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY}
       DATABASE_URL: postgres://fluxo:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@db:5432/fluxo
-      ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1
+      ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1,helpdesk.shoppingcarpina.com.br
       CSRF_TRUSTED_ORIGINS: https://fluxo.axionwebdigital.com.br
     depends_on:
       db:

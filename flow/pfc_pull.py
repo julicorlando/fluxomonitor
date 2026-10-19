@@ -19,10 +19,10 @@ def signature(params,secret):
     source=''.join(str(k)+str(params[k]) for k in sorted(params))+secret
     return hashlib.md5(source.encode()).hexdigest().upper()
 
-def fetch(camera,offset,quantity=100):
+def fetch(camera,offset,quantity=100,*,timeout=8):
     params={'startIndex':offset,'getQuantity':quantity}
     req=Request(f'http://{camera.ip}:8020/{PATH}',data=json.dumps(params,separators=(',',':')).encode(),method='POST',headers={'Accept':'application/json','Content-Type':'application/json;charset=utf-8','Sign':signature(params,os.environ.get('PFC_SERVICE_SECRET',''))})
-    with urlopen(req,timeout=8) as response:
+    with urlopen(req,timeout=timeout) as response:
         body=response.read(1048577)
     if len(body)>1048576:raise ProtocolError('Resposta acima de 1 MiB')
     data=json.loads(body)

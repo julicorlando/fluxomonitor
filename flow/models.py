@@ -272,3 +272,9 @@ class SystemNotice(models.Model):
     recipient=models.CharField(max_length=30,blank=True)
     text=models.TextField(blank=True)
     delivery_detail=models.CharField(max_length=250,blank=True)
+
+class CommunicationCheck(models.Model):
+    ip=models.GenericIPAddressField(unique=True)
+    started_at=models.DateTimeField(default=timezone.now)
+    finished_at=models.DateTimeField(null=True,blank=True)
+    result=models.JSONField(default=dict)

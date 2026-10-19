@@ -27,6 +27,7 @@ services:
       retries: 12
       start_period: 30s
     environment: &env
+      PFC_POLL_SECONDS: ${PFC_POLL_SECONDS:-3}
       PFC_SERVICE_SECRET: ${PFC_SERVICE_SECRET:?Configure PFC_SERVICE_SECRET}
       PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
       WAHA_URL: http://waha:3000
@@ -45,7 +46,8 @@ services:
       <<: *env
       PFC_SERVICE_SECRET: ${PFC_SERVICE_SECRET:?Configure PFC_SERVICE_SECRET}
       PFC_PULL_IPS: ${PFC_PULL_IPS:-192.168.1.235}
-      PFC_POLL_SECONDS: ${PFC_POLL_SECONDS:-5}
+      PFC_POLL_SECONDS: ${PFC_POLL_SECONDS:-3}
+      PFC_HISTORY_PAUSE_SECONDS: ${PFC_HISTORY_PAUSE_SECONDS:-1}
     command: ["python", "manage.py", "poll_pfc"]
     depends_on:
       web:

@@ -49,6 +49,7 @@ class Command(BaseCommand):
                 job=next_job(ip)
                 if job:import_batch(job.pk)
             return
+        pause=max(0.5,min(30,float(os.getenv('PFC_HISTORY_PAUSE_SECONDS','1'))))
         last_pulse=0
         with ThreadPoolExecutor(max_workers=max(1,len(ips)),thread_name_prefix='history') as pool:
             running={};ready={ip:0 for ip in ips}
@@ -62,6 +63,6 @@ class Command(BaseCommand):
                         if not future.done():continue
                         try:future.result()
                         except Exception:logging.exception('Falha no trabalhador de histórico %s',ip)
-                        del running[ip];ready[ip]=now+2
+                        del running[ip];ready[ip]=now+pause
                     if now>=ready[ip]:running[ip]=pool.submit(run_batch,ip)
                 time.sleep(0.25)

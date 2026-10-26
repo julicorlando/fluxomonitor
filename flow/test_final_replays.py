@@ -90,7 +90,19 @@ class FinalReplayTests(TestCase):
         self.assertEqual(secure.post('/whatsapp/finals/replay/',{'preview_token':preview('admin')['token']}).status_code,403)
         response=self.client.post('/whatsapp/finals/replay/',{'preview_token':preview('admin')['token']})
         self.assertEqual(response.status_code,302);self.assertEqual(WhatsAppFinalReplay.objects.count(),1)
-        self.assertTrue(AuditLog.objects.filter(action='whatsapp_final_replay').exists())
+        audit=AuditLog.objects.get(action='wa_final_replay')
+        audit.full_clean()  # SQLite does not enforce PostgreSQL varchar lengths.
         staff=User.objects.create_user('staff',is_staff=True);self.client.force_login(staff)
         self.assertEqual(self.client.post('/whatsapp/finals/replay/',{}).status_code,302)
         self.assertEqual(WhatsAppFinalReplay.objects.count(),1)
+
+    @patch('flow.whatsapp_views.enqueue_final_replay')
+    def test_database_error_is_logged_and_shown_without_blank_500(self,enqueue_mock):
+        from django.db import DataError
+        enqueue_mock.side_effect=DataError('database constraint')
+        with self.assertLogs('flow.whatsapp_views',level='ERROR'):
+            response=self.client.post('/whatsapp/finals/replay/',{'preview_token':'test'})
+        self.assertEqual(response.status_code,302)
+        self.assertFalse(WhatsAppFinalReplay.objects.exists())
+        from django.contrib.messages import get_messages
+        self.assertIn('Confira o histórico',str(list(get_messages(response.wsgi_request))[0]))

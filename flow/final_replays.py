@@ -74,7 +74,7 @@ def enqueue(token,actor):
             raise ValueError('Aguarde um minuto antes de solicitar outro reenvio.')
         replay=WhatsAppFinalReplay.objects.create(request_id=request_id,requested_by=actor,snapshot=rows,text=replay_text(rows))
         WhatsAppFinalReplayRecipient.objects.bulk_create([WhatsAppFinalReplayRecipient(replay=replay,chat_id=chat) for chat in chats])
-        AuditLog.objects.create(actor=actor,action='whatsapp_final_replay',object_type='WhatsAppFinalReplay',object_id=str(replay.pk),changes={'days':[r['day'] for r in rows],'percent':'10.00','recipients':len(chats),'status':'queued'})
+        AuditLog.objects.create(actor=actor,action='wa_final_replay',object_type='WhatsAppFinalReplay',object_id=str(replay.pk),changes={'days':[r['day'] for r in rows],'percent':'10.00','recipients':len(chats),'status':'queued'})
         return replay,True
 
 def dispatch_final_replays():

@@ -113,6 +113,12 @@ def replay_finals(request):
         replay,created=enqueue_final_replay(request.POST.get('preview_token',''),request.user.get_username())
         messages.success(request,f'Reenvio #{replay.pk} '+('registrado na fila. O monitor processará os destinatários; acompanhe o histórico abaixo.' if created else 'já foi registrado. O clique repetido não criou outro envio.'))
     except ValueError as exc:messages.error(request,str(exc))
+    except Exception as exc:
+        import logging
+        from .notifications import runtime_failure
+        logging.getLogger(__name__).exception('Falha ao registrar reenvio dos fluxos finais')
+        runtime_failure('final_replay_request',exc)
+        messages.error(request,'Não foi possível confirmar a solicitação de reenvio. Confira o histórico antes de solicitar novamente. A falha foi registrada para verificação.')
     return redirect('/whatsapp/#final-replays')
 @login_required
 @user_passes_test(lambda u:u.is_superuser)

@@ -124,6 +124,7 @@ class SlaDashboardTests(TestCase):
         self.assertEqual(result['overdue'], 1)
         self.assertEqual(result['legacy'], 1)
         self.assertIsNone(result['csat'])
+        self.assertContains(self.client.get('/support/'), 'value="50.0" aria-label="Percentual de primeira resposta no prazo"')
 
     def test_satisfaction_real_ratings_and_pending_cancelled(self):
         ticket = self.ticket(status='resolved')

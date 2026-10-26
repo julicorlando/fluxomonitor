@@ -34,6 +34,24 @@
       <h2>{{ selected.name }}</h2>
       <p class="muted">{{ selected.company.code }} · {{ selected.phone }} · {{ selected.email }}</p>
       <section class="box">
+        <h3>Vincular resposta pendente ao colaborador</h3>
+        <p class="muted">Somente após confirmar, por ligação ou outro canal independente, que este colaborador é o titular do WhatsApp. O LID não é prova de identidade por si só.</p>
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="verify_lid">
+          <label for="lid-pending">Identificador recebido na triagem</label>
+          <select name="lid" id="lid-pending" required>
+            <option value="">Selecione uma conversa pendente</option>
+            {% for event in unresolved %}
+            <option value="{{ event.sender }}">{{ event.sender }} · {{ event.received_at|date:'d/m H:i' }}</option>
+            {% endfor %}
+          </select>
+          <label><input type="checkbox" name="identity_confirmed" value="yes" required> Confirmei a identidade do titular por canal independente e autorizo vincular este LID ao cadastro selecionado.</label>
+          <button type="submit">Vincular e processar respostas</button>
+        </form>
+        <p class="muted">A ação é auditada e recupera as mensagens das últimas 24 horas. Chamados não são criados automaticamente sem seguir o fluxo de confirmação.</p>
+      </section>
+      <section class="box">
         <h3>Atendimento automático</h3>
         <p>Estado atual: <strong>{{ conversation.state|default:"Aguardando primeira mensagem" }}</strong> · Mensagens recebidas aguardando processamento: <strong>{{ inbound_pending }}</strong></p>
         {% if conversation.state == 'human' %}<p>Atendimento humano ativo: o bot não responde automaticamente enquanto este estado estiver em vigor.</p>{% endif %}

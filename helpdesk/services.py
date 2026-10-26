@@ -49,6 +49,8 @@ def normalized(text):
 
 
 def create_ticket(session, message):
+    if pending_surveys(message.contact).exists():
+        raise ValidationError('Avalie o atendimento anterior antes de abrir outro chamado.')
     company = Company.objects.select_for_update().get(pk=session.company_id)
     company.last_ticket += 1
     company.save(update_fields=['last_ticket'])
@@ -64,11 +66,22 @@ def create_ticket(session, message):
 
 def pending_surveys(contact):
     return Satisfaction.objects.filter(ticket__contact=contact, ticket__company=contact.company,
-        ticket__requester_phone=contact.phone, cancelled=False, answered_at__isnull=True,
-        expires_at__gt=timezone.now()).select_related('ticket').order_by('-id')
+        ticket__requester_phone=contact.phone, ticket__status__in=('resolved', 'closed'),
+        cancelled=False, answered_at__isnull=True).select_related('ticket').order_by('created_at', 'id')
+
+
+def survey_prompt(survey):
+    return (f'Como você avalia o atendimento do chamado *{survey.ticket.code}*?\n'
+            'Responda apenas com uma nota de *1 a 5*:\n'
+            '1 — Muito insatisfeito\n2 — Insatisfeito\n3 — Regular\n4 — Satisfeito\n5 — Muito satisfeito\n\n'
+            'A avaliação é obrigatória para abrir um novo chamado.\n'
+            f'Você também pode enviar: AVALIAR {survey.ticket.code} 5')
 
 
 def menu(contact):
+    survey = pending_surveys(contact).first()
+    if survey:
+        return survey_prompt(survey)
     existing = list(Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).values_list('code', flat=True)[:5])
     if existing:
         return ('Você tem chamados em aberto: ' + ', '.join(existing) +
@@ -110,20 +123,31 @@ def process_message(message_id):
     n = normalized(text)
     output, ticket = None, None
 
-    # Explicit rating command is unambiguous even while another draft is in progress.
+    # Pending evaluation takes precedence over every opening path and session state.
     rating = re.fullmatch(r'avaliar\s+([a-z]+-\d+)\s+([1-5])', n)
     surveys = pending_surveys(contact)
-    generic_rating = session.state == 'idle' and re.fullmatch('[1-5]', n) and surveys.count() == 1
+    generic_rating = re.fullmatch('[1-5]', n) and surveys.exists()
     if rating or generic_rating:
         survey = surveys.filter(ticket__code__iexact=rating[1]).first() if rating else surveys.first()
-        if survey:
+        if survey and int(message.sent_at.timestamp()) < int(survey.created_at.timestamp()):
+            output = 'Recebi uma mensagem anterior ao encerramento. Para avaliar agora:\n' + survey_prompt(survey)
+        elif survey:
             survey.rating = int(rating[2] if rating else n)
             survey.answered_at = now
             survey.save(update_fields=['rating', 'answered_at'])
             audit(contact.name, 'support_rating', survey, {'rating': survey.rating, 'ticket': survey.ticket.code})
-            output = f'Obrigado pela avaliação do chamado {survey.ticket.code}! Para deixar um comentário, envie FEEDBACK {survey.ticket.code} seguido do comentário.'
+            output = f'Obrigado! Sua nota {survey.rating} para o chamado *{survey.ticket.code}* foi registrada.'
+            remaining = pending_surveys(contact).first()
+            if remaining:
+                output += '\n\nHá outra avaliação pendente.\n' + survey_prompt(remaining)
+            else:
+                session.state, session.draft = 'offer', {}
+                output += (f'\nPara deixar um comentário opcional, envie FEEDBACK {survey.ticket.code} seguido do comentário.'
+                           '\n\nAvaliações concluídas. Você já pode abrir um novo chamado.\n' + menu(contact))
         else:
             output = 'Não encontrei uma avaliação pendente desse chamado. Confira o protocolo.'
+    elif surveys.exists():
+        output = survey_prompt(surveys.first())
     elif n.startswith('feedback '):
         parts = text.split(maxsplit=2)
         survey = Satisfaction.objects.filter(ticket__contact=contact, ticket__company=contact.company,
@@ -162,11 +186,8 @@ def process_message(message_id):
             session.state, session.draft = 'offer', {}
             output = menu(contact)
     elif session.state == 'idle':
-        if re.fullmatch('[1-5]', n) and surveys.count() > 1:
-            output = 'Há mais de uma avaliação pendente. Envie AVALIAR PROTOCOLO NOTA. Protocolos: ' + ', '.join(s.ticket.code for s in surveys[:5])
-        else:
-            session.state, session.draft = 'offer', {}
-            output = menu(contact)
+        session.state, session.draft = 'offer', {}
+        output = menu(contact)
     elif session.state == 'offer':
         has_open = Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).exists()
         if n in ('1', 'sim', 'novo', 'abrir chamado'):
@@ -278,9 +299,10 @@ def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision
     if not internal:
         body = f'*{ticket.code}* · {STATUS[status]}\n{text}'
         if changed_resolution:
-            Satisfaction.objects.create(ticket=ticket, cycle=ticket.revision, expires_at=now + timedelta(days=7))
-            body += (f'\n\nComo você avalia o atendimento? Nota de 1 a 5.\n'
-                     f'Envie: AVALIAR {ticket.code} 5\nSe o problema continuar, envie ATENDENTE.')
+            survey = Satisfaction.objects.create(ticket=ticket, cycle=ticket.revision, expires_at=now + timedelta(days=7))
+            body += '\n\n' + survey_prompt(pending_surveys(ticket.contact).first() or survey)
+            Conversation.objects.filter(contact=ticket.contact, company=ticket.company).update(
+                state='idle', draft={}, expires_at=None)
         queue(ticket.contact, body, f'update:{update.pk}', ticket, ticket.company_id, ticket.requester_phone)
     audit(actor.get_username(), 'support_update', ticket, {'update': update.pk, 'from': previous,
           'to': status, 'internal': internal, 'assigned_to': assigned_to.pk if assigned_to else None})

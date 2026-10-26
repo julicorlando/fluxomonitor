@@ -12,7 +12,7 @@ from flow.models import AuditLog, WhatsAppDelivery
 from .forms import ContactForm
 from .models import (AgentGrant, BotConfig, Company, Contact, Conversation, DeliveryAck,
                      Inbound, Outbound, Satisfaction, Ticket, TicketUpdate, UnresolvedInbound)
-from .services import process_message, update_ticket
+from .services import create_ticket, process_message, update_ticket
 from .transport import dispatch, ensure_webhook, hook_key, receive_event
 
 
@@ -233,12 +233,103 @@ class HelpdeskTests(TestCase):
         self.update(ticket, status='working')
         self.assertTrue(Satisfaction.objects.latest('pk').cancelled)
 
-    def test_resolution_does_not_discard_another_draft(self):
+    def test_resolution_prioritizes_evaluation_over_another_draft(self):
         ticket = self.ticket()
         self.say('Oi'); self.say('1'); self.say('RH')
         self.update(ticket, status='resolved')
         self.say('Outro problema no computador')
-        self.assertEqual(Conversation.objects.get().state, 'confirm')
+        self.assertEqual(Conversation.objects.get().state, 'idle')
+        self.assertIn('avaliação é obrigatória', Outbound.objects.last().text)
+        self.assertEqual(Ticket.objects.count(), 1)
+
+    def test_resolution_queues_survey_immediately_once(self):
+        ticket = self.update(self.ticket(), status='resolved', text='Rede restabelecida')
+        message = Outbound.objects.latest('pk')
+        self.assertEqual(message.status, 'pending')
+        self.assertEqual(message.ticket, ticket)
+        self.assertIn('Rede restabelecida', message.text)
+        self.assertIn('Responda apenas com uma nota de *1 a 5*', message.text)
+        self.assertEqual(Satisfaction.objects.count(), 1)
+        self.update(ticket, status='closed')
+        self.assertEqual(Satisfaction.objects.count(), 1)
+        self.assertNotIn('Como você avalia', Outbound.objects.latest('pk').text)
+
+    def test_pending_rating_blocks_opening_and_human_shortcuts(self):
+        ticket = self.update(self.ticket(), status='resolved')
+        for text in ['Olá', 'Sim', 'novo', 'ATENDENTE', 'CANCELAR', 'REINICIAR', '0', '6', 'ótimo']:
+            self.say(text)
+            self.assertIn(ticket.code, Outbound.objects.latest('pk').text)
+            self.assertIn('avaliação é obrigatória', Outbound.objects.latest('pk').text)
+            self.assertEqual(Ticket.objects.count(), 1)
+            self.assertIsNone(Satisfaction.objects.get().rating)
+        self.say('5')
+        for text in ['Sim', 'Financeiro', 'Outro problema na rede', 'Confirmar']:
+            self.say(text)
+        self.assertEqual(Ticket.objects.count(), 2)
+
+    def test_rating_survives_expired_session_and_survey(self):
+        ticket = self.update(self.ticket(), status='resolved')
+        Satisfaction.objects.update(expires_at=timezone.now() - timedelta(days=30))
+        Conversation.objects.update(state='confirm', draft={'target': 'TI', 'description': 'Falha de rede'},
+                                    expires_at=timezone.now() - timedelta(days=30))
+        self.say('Confirmar')
+        self.assertEqual(Ticket.objects.count(), 1)
+        self.say('4')
+        self.assertEqual(Satisfaction.objects.get(ticket=ticket).rating, 4)
+        self.assertEqual(Conversation.objects.get().state, 'offer')
+
+    def test_rating_precedes_every_conversation_state(self):
+        self.update(self.ticket(), status='resolved')
+        for state in ['idle', 'offer', 'target', 'description', 'confirm', 'human', 'lookup', 'note']:
+            Conversation.objects.update(state=state)
+            self.say('Não consigo abrir outro chamado')
+            self.assertIn('avaliação é obrigatória', Outbound.objects.latest('pk').text)
+        self.say('3')
+        self.assertEqual(Satisfaction.objects.get().rating, 3)
+
+    def test_master_restart_cannot_bypass_pending_rating(self):
+        self.update(self.ticket(), status='resolved')
+        self.client.post(f'/support/inbox/{self.contact.pk}/', {'action': 'restart_bot'})
+        self.assertIn('avaliação é obrigatória', Outbound.objects.latest('pk').text)
+        self.say('5')
+        self.assertEqual(Satisfaction.objects.get().rating, 5)
+        self.assertEqual(Ticket.objects.count(), 1)
+
+    def test_other_employee_rating_cannot_unlock_contact(self):
+        ticket = self.update(self.ticket(), status='resolved')
+        self.say('AVALIAR CM-99999 5')
+        self.assertIsNone(Satisfaction.objects.get().rating)
+        self.say('Confirmar')
+        self.assertEqual(Ticket.objects.count(), 1)
+        self.assertIn(ticket.code, Outbound.objects.latest('pk').text)
+
+    def test_reopening_cancels_obligation_and_next_resolution_requests_again(self):
+        ticket = self.update(self.ticket(), status='resolved')
+        ticket = self.update(ticket, status='working')
+        self.say('Olá')
+        self.assertNotIn('avaliação é obrigatória', Outbound.objects.latest('pk').text)
+        self.update(ticket, status='resolved')
+        self.say('2')
+        self.assertEqual(Satisfaction.objects.filter(cancelled=False).get().rating, 2)
+        self.assertEqual(Satisfaction.objects.filter(cancelled=True).count(), 1)
+
+    def test_service_rejects_new_ticket_with_pending_rating(self):
+        self.update(self.ticket(), status='resolved')
+        session = Conversation.objects.get(contact=self.contact)
+        session.draft = {'target': 'TI', 'description': 'Tentativa direta'}
+        with self.assertRaises(ValidationError):
+            create_ticket(session, Inbound.objects.last())
+        self.assertEqual(Ticket.objects.count(), 1)
+
+    def test_old_delayed_number_is_not_used_as_rating(self):
+        self.update(self.ticket(), status='resolved')
+        event = self.payload('1', timestamp=int((timezone.now() - timedelta(minutes=1)).timestamp()))
+        # A delayed message may predate the session as well as the survey.
+        Conversation.objects.update(last_sent_at=None)
+        receive_event(event)
+        process_message(Inbound.objects.get(external_id=event['payload']['id']).pk)
+        self.assertIsNone(Satisfaction.objects.get().rating)
+        self.assertIn('anterior ao encerramento', Outbound.objects.last().text)
 
     def test_pages_render_and_csrf_is_required(self):
         ticket = self.ticket()
@@ -351,15 +442,19 @@ class HelpdeskTests(TestCase):
         self.assertContains(result, 'atualizado por outra pessoa')
         self.assertEqual(Outbound.objects.count(), before)
 
-    def test_multiple_surveys_require_protocol(self):
-        first = self.update(self.ticket(), status='resolved')
-        second = self.update(self.ticket(), status='resolved')
+    def test_multiple_surveys_are_presented_oldest_first(self):
+        first = self.ticket()
+        second = self.ticket()
+        self.update(first, status='resolved')
+        self.update(second, status='resolved')
         self.say('5')
-        self.assertIn('mais de uma avaliação', Outbound.objects.last().text)
-        self.assertFalse(Satisfaction.objects.filter(rating__isnull=False).exists())
-        self.say(f'AVALIAR {first.code} 5')
         self.assertEqual(Satisfaction.objects.get(ticket=first).rating, 5)
         self.assertIsNone(Satisfaction.objects.get(ticket=second).rating)
+        self.assertIn(second.code, Outbound.objects.last().text)
+        self.assertIn('Há outra avaliação pendente', Outbound.objects.last().text)
+        self.say('4')
+        self.assertEqual(Satisfaction.objects.get(ticket=second).rating, 4)
+        self.assertIn('já pode abrir um novo chamado', Outbound.objects.last().text)
 
     def test_unauthorized_assignee_rejected(self):
         user = get_user_model().objects.create_user('other', is_staff=True)

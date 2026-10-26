@@ -26,4 +26,5 @@ SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO','https')
 DATA_UPLOAD_MAX_MEMORY_SIZE=1048576
 AUTH_PASSWORD_VALIDATORS=[{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator'}]
 
-\nMEDIA_ROOT=Path(os.getenv('PRIVATE_MEDIA_ROOT', str(BASE_DIR/'private_media')))\n
+
+MEDIA_ROOT=Path(os.getenv('PRIVATE_MEDIA_ROOT', str(BASE_DIR/'private_media')))

@@ -255,6 +255,8 @@ class Asset(models.Model):
     STATES = [('active','Em uso'),('stock','Em estoque'),('maintenance','Em manutenção'),('retired','Desativado')]
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     tag = models.CharField(max_length=60)
+    invoice_number = models.CharField(max_length=120, blank=True)
+    acquisition_date = models.DateField(null=True, blank=True)
     name = models.CharField(max_length=150)
     kind = models.CharField(max_length=12, choices=KINDS, default='computer')
     state = models.CharField(max_length=12, choices=STATES, default='active')
@@ -268,6 +270,20 @@ class Asset(models.Model):
         constraints = [models.UniqueConstraint(fields=['company','tag'], name='support_asset_tag')]
     def __str__(self):
         return f'{self.company.code} · {self.tag} · {self.name}'
+
+
+class AssetAttachment(models.Model):
+    TYPES = [('photo', 'Fotografia'), ('signed_term', 'Termo assinado'), ('document', 'Documento PDF')]
+    asset = models.ForeignKey(Asset, related_name='attachments', on_delete=models.PROTECT)
+    kind = models.CharField(max_length=16, choices=TYPES)
+    file = models.FileField(upload_to='private_inventory/%Y/%m/')
+    original_name = models.CharField(max_length=180)
+    size_bytes = models.PositiveIntegerField()
+    uploaded_by = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
 
 
 class Maintenance(models.Model):

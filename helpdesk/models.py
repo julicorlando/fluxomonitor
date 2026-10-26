@@ -257,6 +257,12 @@ class Asset(models.Model):
     tag = models.CharField(max_length=60)
     invoice_number = models.CharField(max_length=120, blank=True)
     acquisition_date = models.DateField(null=True, blank=True)
+    product_code = models.CharField(max_length=120, blank=True)
+    warranty_expires_at = models.DateField(null=True, blank=True)
+    purchase_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    tech_specs = models.JSONField(default=dict, blank=True)
+    disposed_at = models.DateField(null=True, blank=True)
+    disposal_reason = models.TextField(blank=True)
     name = models.CharField(max_length=150)
     kind = models.CharField(max_length=12, choices=KINDS, default='computer')
     state = models.CharField(max_length=12, choices=STATES, default='active')
@@ -270,6 +276,39 @@ class Asset(models.Model):
         constraints = [models.UniqueConstraint(fields=['company','tag'], name='support_asset_tag')]
     def __str__(self):
         return f'{self.company.code} · {self.tag} · {self.name}'
+
+
+class AssetMovement(models.Model):
+    ACTIONS = [('handover','Entrega'),('return','Devolução'),('transfer','Transferência'),('loan','Empréstimo')]
+    asset = models.ForeignKey(Asset, related_name='movements', on_delete=models.PROTECT)
+    action = models.CharField(max_length=12, choices=ACTIONS)
+    old_company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name='+')
+    new_company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name='+')
+    old_contact = models.ForeignKey(Contact, null=True, blank=True, on_delete=models.PROTECT, related_name='+')
+    new_contact = models.ForeignKey(Contact, null=True, blank=True, on_delete=models.PROTECT, related_name='+')
+    old_location = models.CharField(max_length=200, blank=True)
+    new_location = models.CharField(max_length=200, blank=True)
+    reason = models.TextField(max_length=2000)
+    author = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class InventoryCheck(models.Model):
+    asset = models.ForeignKey(Asset, related_name='checks', on_delete=models.PROTECT)
+    found = models.BooleanField(default=True)
+    location = models.CharField(max_length=200, blank=True)
+    notes = models.TextField(max_length=1000, blank=True)
+    checked_by = models.CharField(max_length=150)
+    checked_at = models.DateTimeField(auto_now_add=True)
+
+
+class AssetDisposal(models.Model):
+    asset = models.OneToOneField(Asset, related_name='disposal', on_delete=models.PROTECT)
+    reason = models.TextField(max_length=2000)
+    data_sanitized = models.BooleanField(default=False)
+    approved_by = models.CharField(max_length=150)
+    disposed_on = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class AssetAttachment(models.Model):

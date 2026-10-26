@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import json
 import logging
@@ -10,17 +11,19 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Q
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-from .forms import ContactForm, GrantForm, UpdateForm
-from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound, VerifiedChatIdentity, SenderIdentity
+from .forms import ContactForm, GrantForm, UpdateForm, SlaPolicyForm, DashboardFilterForm
+from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound, VerifiedChatIdentity, SenderIdentity, SlaPolicy, Satisfaction
 from .services import OPEN, audit, company_ids, update_ticket, menu
 from .transport import receive_event, valid_signature
 from .bindings import remember_sender, import_pending
+from .sla import ticket_sla
+from .reporting import dashboard
 
 
 def visible(user):
@@ -33,6 +36,9 @@ def version(user, ticket_id=None):
         tickets = tickets.filter(pk=ticket_id)
     data = list(tickets.order_by('-updated_at').values_list('pk', 'revision', 'updated_at')[:200])
     data += list(Outbound.objects.filter(company_id__in=company_ids(user), ticket__in=tickets).values('status').annotate(n=Count('id')).order_by('status'))
+    data += list(Satisfaction.objects.filter(ticket__in=tickets).values_list('id', 'rating', 'answered_at', 'cancelled', 'feedback'))
+    data += list(SlaPolicy.objects.values_list('priority', 'response_minutes', 'resolution_minutes'))
+    data += [timezone.now().strftime('%Y%m%d%H%M')]
     return hashlib.sha256(str(data).encode()).hexdigest()
 
 
@@ -44,18 +50,46 @@ def home(request):
     companies = Company.objects.filter(pk__in=company_ids(request.user))
     if request.GET.get('company'):
         tickets = tickets.filter(company__code=request.GET['company'])
-    if request.GET.get('status'):
+    if request.GET.get('status') == 'active':
+        tickets = tickets.filter(status__in=OPEN)
+    elif request.GET.get('status'):
         tickets = tickets.filter(status=request.GET['status'])
     if request.GET.get('q'):
         q = request.GET['q'][:150]
         tickets = tickets.filter(Q(code__icontains=q) | Q(requester_name__icontains=q) | Q(target__icontains=q))
-    all_tickets = visible(request.user)
+    if request.GET.get('priority') in dict(SlaPolicy.PRIORITIES):
+        tickets = tickets.filter(priority=request.GET['priority'])
+    if request.GET.get('category') in dict(Ticket.CATEGORIES):
+        tickets = tickets.filter(category=request.GET['category'])
+    if request.GET.get('assignment') == 'mine':
+        tickets = tickets.filter(assigned_to=request.user)
+    elif request.GET.get('assignment') == 'unassigned':
+        tickets = tickets.filter(assigned_to__isnull=True)
+    period = DashboardFilterForm(request.GET)
+    if period.is_valid():
+        if period.cleaned_data.get('start'):
+            tickets = tickets.filter(created_at__date__gte=period.cleaned_data['start'])
+        if period.cleaned_data.get('end'):
+            tickets = tickets.filter(created_at__date__lte=period.cleaned_data['end'])
+    else:
+        tickets = tickets.none()
+    if request.GET.get('sla') in ('breached', 'risk', 'legacy'):
+        sla_state = request.GET['sla']
+        matching = [t.pk for t in tickets.filter(status__in=OPEN).iterator(chunk_size=200) if ticket_sla(t)['state'] == sla_state]
+        tickets = tickets.filter(pk__in=matching)
+    if request.GET.get('format') == 'csv' and period.is_valid():
+        return export_tickets(request, tickets)
+    all_tickets = tickets
     cfg = BotConfig.objects.get(pk=1)
     worker_ok = bool(cfg.worker_at and cfg.worker_at > timezone.now() - timedelta(seconds=90))
     filters = request.GET.copy()
     filters.pop('page', None)
+    page = Paginator(tickets, 30).get_page(request.GET.get('page'))
+    for ticket in page:
+        ticket.sla = ticket_sla(ticket)
     return render(request, 'helpdesk/home.html', {
-        'tickets': Paginator(tickets, 30).get_page(request.GET.get('page')),
+        'tickets': page, 'dash': dashboard(all_tickets), 'period': period,
+        'priorities': SlaPolicy.PRIORITIES, 'categories': Ticket.CATEGORIES,
         'companies': companies, 'statuses': Ticket.STATUS, 'cfg': cfg, 'worker_ok': worker_ok,
         'open_count': all_tickets.filter(status__in=OPEN).count(),
         'resolved_count': all_tickets.filter(status__in=('resolved', 'closed')).count(),
@@ -90,11 +124,14 @@ def detail(request, ticket_id):
         data = form.cleaned_data
         try:
             update_ticket(ticket.pk, request.user, status=data['status'], text=data['text'], internal=data['internal'],
-                          expected_revision=data['revision'], assigned_to=data['assigned_to'])
+                          expected_revision=data['revision'], assigned_to=data['assigned_to'],
+                          priority=data.get('priority') or None, category=data.get('category') or None,
+                          start_sla=data.get('start_sla', False))
             messages.success(request, 'Atualização registrada.' if data['internal'] else 'Atualização registrada e mensagem colocada na fila do WhatsApp.')
             return redirect(f'/support/tickets/{ticket.pk}/')
         except ValidationError as exc:
             form.add_error(None, exc)
+    ticket.sla = ticket_sla(ticket)
     return render(request, 'helpdesk/detail.html', {'ticket': ticket, 'form': form,
         'updates': ticket.updates.all(), 'deliveries': ticket.messages.order_by('-id')[:30],
         'surveys': ticket.surveys.order_by('-id'), 'version': version(request.user, ticket.pk)})
@@ -188,19 +225,29 @@ def tickets_api(request, ticket_id=None):
         return HttpResponse(status=405)
     tickets = visible(request.user).select_related('company')
     def serialize(ticket):
+        sla = ticket_sla(ticket)
+        stamp = lambda value: value.isoformat() if value else None
         return {'id': ticket.pk, 'code': ticket.code, 'company': ticket.company.code,
                 'requester': {'name': ticket.requester_name, 'phone': ticket.requester_phone, 'email': ticket.requester_email},
                 'target': ticket.target, 'description': ticket.description, 'status': ticket.status,
+                'priority': ticket.priority, 'category': ticket.category,
+                'sla': {'state': sla['state'], 'label': sla['label'], 'calendar': '24x7',
+                        'started_at': stamp(ticket.sla_started_at), 'response_due_at': stamp(ticket.response_due_at),
+                        'resolution_due_at': stamp(ticket.resolution_due_at),
+                        'first_responded_at': stamp(ticket.first_responded_at), 'resolved_at': stamp(ticket.resolved_at)},
                 'revision': ticket.revision, 'assigned_to': ticket.assigned_to_id,
                 'created_at': ticket.created_at.isoformat(), 'updated_at': ticket.updated_at.isoformat()}
     if ticket_id is not None:
         ticket = get_object_or_404(tickets, pk=ticket_id)
         data = serialize(ticket)
+        data['evaluations'] = list(ticket.surveys.values('cycle', 'rating', 'feedback', 'answered_at', 'cancelled'))
         data['updates'] = list(ticket.updates.values('id', 'author', 'text', 'internal', 'old_status', 'new_status', 'created_at'))
         return JsonResponse(data)
     if request.GET.get('company'):
         tickets = tickets.filter(company__code=request.GET['company'])
-    if request.GET.get('status'):
+    if request.GET.get('status') == 'active':
+        tickets = tickets.filter(status__in=OPEN)
+    elif request.GET.get('status'):
         tickets = tickets.filter(status=request.GET['status'])
     page = Paginator(tickets, 50).get_page(request.GET.get('page'))
     return JsonResponse({'count': page.paginator.count, 'page': page.number, 'pages': page.paginator.num_pages,
@@ -225,7 +272,9 @@ def update_api(request, ticket_id):
     data = form.cleaned_data
     try:
         ticket = update_ticket(ticket.pk, request.user, status=data['status'], text=data['text'], internal=data['internal'],
-                               expected_revision=data['revision'], assigned_to=data['assigned_to'])
+                               expected_revision=data['revision'], assigned_to=data['assigned_to'],
+                          priority=data.get('priority') or None, category=data.get('category') or None,
+                          start_sla=data.get('start_sla', False))
     except ValidationError as exc:
         return JsonResponse({'errors': exc.messages}, status=409)
     return JsonResponse({'id': ticket.pk, 'code': ticket.code, 'status': ticket.status, 'revision': ticket.revision})
@@ -316,3 +365,58 @@ def master_inbox(request, contact_id=None):
         'conversation': conversation, 'inbound_pending': inbound_pending,
         'sender_bindings': SenderIdentity.objects.filter(contact=selected, phone=selected.phone) if selected else [],
     })
+
+
+def export_tickets(request, tickets):
+    # Only called after home() has applied company permissions and validated filters.
+    class Echo:
+        def write(self, value):
+            return value
+    from django.db.models import OuterRef, Subquery
+    tickets = tickets.annotate(last_rating=Subquery(Satisfaction.objects.filter(ticket_id=OuterRef('pk'),
+        cancelled=False, answered_at__isnull=False).order_by('-answered_at').values('rating')[:1]))
+    writer = csv.writer(Echo(), delimiter=';')
+    def safe(value):
+        text = str(value or '')
+        return "'" + text if text.lstrip().startswith(('=', '+', '-', '@', '\t', '\r')) else text
+    def rows():
+        yield '\ufeff'
+        yield writer.writerow(['Protocolo','Empresa','Colaborador','Equipamento / setor','Categoria','Prioridade',
+            'Status','Responsável','Abertura','Início SLA','Prazo resposta','Primeira resposta','Prazo resolução','Resolução','SLA','Última nota'])
+        for t in tickets.iterator(chunk_size=200):
+            stamp = lambda d: timezone.localtime(d).strftime('%d/%m/%Y %H:%M') if d else ''
+            yield writer.writerow([safe(value) for value in [t.code,t.company.code,t.requester_name,t.target,
+                t.get_category_display(),t.get_priority_display(),t.get_status_display(),t.assigned_to,
+                stamp(t.created_at),stamp(t.sla_started_at),stamp(t.response_due_at),stamp(t.first_responded_at),
+                stamp(t.resolution_due_at),stamp(t.resolved_at),ticket_sla(t)['label'],t.last_rating]])
+    response = StreamingHttpResponse(rows(), content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="gesti-ti-chamados.csv"'
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+@never_cache
+def sla_settings(request):
+    from django.forms import modelformset_factory
+    Factory = modelformset_factory(SlaPolicy, form=SlaPolicyForm, extra=0, edit_only=True)
+    forms = Factory(request.POST or None, queryset=SlaPolicy.objects.order_by('id'))
+    if request.method == 'POST' and forms.is_valid():
+        # Ensure all four policies are submitted exactly once; IDs cannot remove a policy.
+        ids = [form.cleaned_data['id'].pk for form in forms if form.cleaned_data.get('id')]
+        expected = set(SlaPolicy.objects.values_list('pk', flat=True))
+        if len(ids) != len(expected) or set(ids) != expected:
+            messages.error(request, 'Envie as quatro prioridades sem duplicar ou excluir regras.')
+        else:
+            with transaction.atomic():
+                list(SlaPolicy.objects.select_for_update().all())
+                for form in forms:
+                    if form.has_changed():
+                        policy = form.save()
+                        audit(request.user.get_username(), 'support_sla_policy', policy,
+                              {'priority':policy.priority, 'response_minutes':policy.response_minutes,
+                               'resolution_minutes':policy.resolution_minutes})
+            messages.success(request, 'Prazos salvos. Chamados já iniciados preservam seus prazos; novos chamados usam as novas metas.')
+            return redirect('/support/sla/')
+    return render(request, 'helpdesk/sla_settings.html', {'formset': forms})

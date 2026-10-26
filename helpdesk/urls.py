@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path('', views.home),
+    path('sla/', views.sla_settings),
     path('contacts/', views.contacts),
     path('contacts/<int:contact_id>/', views.contacts),
     path('settings/', views.settings),

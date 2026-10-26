@@ -51,7 +51,32 @@ class BotConfig(models.Model):
     detail = models.CharField(max_length=250, blank=True)
 
 
+class SlaPolicy(models.Model):
+    PRIORITIES = [('critical', 'Crítica'), ('high', 'Alta'), ('normal', 'Normal'), ('low', 'Baixa')]
+    priority = models.CharField(max_length=12, choices=PRIORITIES, unique=True)
+    response_minutes = models.PositiveIntegerField(validators=[MinValueValidator(1), MaxValueValidator(525600)])
+    resolution_minutes = models.PositiveIntegerField(validators=[MinValueValidator(1), MaxValueValidator(525600)])
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=Q(response_minutes__gte=1) &
+                       Q(resolution_minutes__gte=models.F('response_minutes')), name='support_sla_valid_targets')]
+
+    def __str__(self):
+        return self.get_priority_display()
+
+
 class Ticket(models.Model):
+    CATEGORIES = [('general', 'Geral / triagem'), ('hardware', 'Computadores e equipamentos'),
+                  ('network', 'Rede e internet'), ('software', 'Sistemas e aplicativos'),
+                  ('access', 'Acessos e permissões'), ('email', 'E-mail'),
+                  ('printing', 'Impressoras'), ('security', 'Segurança da informação')]
+    priority = models.CharField(max_length=12, choices=SlaPolicy.PRIORITIES, default='normal')
+    category = models.CharField(max_length=16, choices=CATEGORIES, default='general')
+    sla_started_at = models.DateTimeField(null=True, blank=True)
+    response_due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    resolution_due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    first_responded_at = models.DateTimeField(null=True, blank=True)
+
     STATUS = [('open', 'Aberto'), ('working', 'Em atendimento'), ('waiting', 'Aguardando solicitante'),
               ('resolved', 'Resolvido'), ('closed', 'Concluído'), ('cancelled', 'Cancelado')]
     company = models.ForeignKey(Company, on_delete=models.PROTECT)

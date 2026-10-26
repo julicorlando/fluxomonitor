@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Company, Contact, AgentGrant, Ticket, TicketUpdate, Satisfaction, Inbound, Outbound, SenderIdentity
+from .models import Company, Contact, AgentGrant, Ticket, TicketUpdate, Satisfaction, Inbound, Outbound, SenderIdentity, SlaPolicy
 
 
 # Read-only here: writes go through the scoped UI and transactional services.
@@ -20,5 +20,5 @@ class ReadOnlyAdmin(admin.ModelAdmin):
         return False
 
 
-for model in (Company, Contact, AgentGrant, Ticket, TicketUpdate, Satisfaction, Inbound, Outbound, SenderIdentity):
+for model in (Company, Contact, AgentGrant, Ticket, TicketUpdate, Satisfaction, Inbound, Outbound, SenderIdentity, SlaPolicy):
     admin.site.register(model, ReadOnlyAdmin)

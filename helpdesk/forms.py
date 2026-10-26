@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from .identity import normalize_phone
-from .models import AgentGrant, Company, Contact, Ticket
+from .models import AgentGrant, Company, Contact, Ticket, SlaPolicy
 
 
 class ContactForm(forms.ModelForm):
@@ -19,6 +19,10 @@ class ContactForm(forms.ModelForm):
 
 
 class UpdateForm(forms.Form):
+    priority = forms.ChoiceField(label='Prioridade', choices=SlaPolicy.PRIORITIES, required=False)
+    category = forms.ChoiceField(label='Categoria', choices=Ticket.CATEGORIES, required=False)
+    start_sla = forms.BooleanField(label='Iniciar SLA deste chamado agora', required=False,
+        help_text='Para chamados antigos sem SLA. Não cria atrasos retroativos.')
     status = forms.ChoiceField(label='Status', choices=Ticket.STATUS)
     text = forms.CharField(label='Atualização / solução', min_length=1, max_length=4000,
                            widget=forms.Textarea(attrs={'rows': 4}))
@@ -32,10 +36,36 @@ class UpdateForm(forms.Form):
             Q(is_superuser=True) | Q(agentgrant__company=ticket.company)).distinct().order_by('username')
         from .services import TRANSITIONS
         self.fields['status'].choices = [(key, label) for key, label in Ticket.STATUS if key == ticket.status or key in TRANSITIONS[ticket.status]]
-        self.initial.update({'status': ticket.status, 'revision': ticket.revision, 'assigned_to': ticket.assigned_to_id})
+        if ticket.sla_started_at or ticket.status not in ('open', 'working', 'waiting'):
+            self.fields.pop('start_sla')
+        self.initial.update({'priority': ticket.priority, 'category': ticket.category, 'status': ticket.status, 'revision': ticket.revision, 'assigned_to': ticket.assigned_to_id})
 
 
 class GrantForm(forms.Form):
     user = forms.ModelChoiceField(label='Operador do GesTi', queryset=get_user_model().objects.filter(is_active=True, is_staff=True, is_superuser=False).order_by('username'))
     companies = forms.ModelMultipleChoiceField(label='Empresas permitidas', queryset=Company.objects.all(), required=False,
                                                widget=forms.CheckboxSelectMultiple)
+
+
+class SlaPolicyForm(forms.ModelForm):
+    class Meta:
+        model = SlaPolicy
+        fields = ['response_minutes', 'resolution_minutes']
+        labels = {'response_minutes': 'Primeira resposta (minutos)', 'resolution_minutes': 'Resolução (minutos)'}
+
+    def clean(self):
+        data = super().clean()
+        if data.get('response_minutes') and data.get('resolution_minutes') and data['response_minutes'] > data['resolution_minutes']:
+            raise forms.ValidationError('O prazo de resolução deve ser igual ou maior que o da primeira resposta.')
+        return data
+
+
+class DashboardFilterForm(forms.Form):
+    start = forms.DateField(label='De', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+    end = forms.DateField(label='Até', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+
+    def clean(self):
+        data = super().clean()
+        if data.get('start') and data.get('end') and data['start'] > data['end']:
+            raise forms.ValidationError('A data inicial deve ser anterior ou igual à final.')
+        return data

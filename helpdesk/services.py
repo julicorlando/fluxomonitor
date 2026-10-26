@@ -8,6 +8,7 @@ from django.utils import timezone
 from flow.models import AuditLog
 from .models import (AgentGrant, BotConfig, Company, Contact, Conversation, Inbound,
                      Outbound, Satisfaction, Ticket, TicketUpdate)
+from .sla import start_sla as initialize_sla, reprioritize
 
 STATUS = dict(Ticket.STATUS)
 OPEN = ('open', 'working', 'waiting')
@@ -59,6 +60,8 @@ def create_ticket(session, message):
         company=company, number=company.last_ticket, code=f'{company.code}-{company.last_ticket:05d}',
         contact=contact, requester_name=contact.name, requester_phone=message.phone,
         requester_email=contact.email, target=session.draft['target'], description=session.draft['description'])
+    initialize_sla(ticket, ticket.created_at)
+    ticket.save(update_fields=['sla_started_at', 'response_due_at', 'resolution_due_at'])
     TicketUpdate.objects.create(ticket=ticket, author=contact.name, text='Chamado aberto pelo WhatsApp.')
     audit(contact.name, 'support_open', ticket, {'code': ticket.code})
     return ticket
@@ -266,7 +269,7 @@ def process_message(message_id):
 
 
 @transaction.atomic
-def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision, assigned_to=None):
+def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision, assigned_to=None, priority=None, category=None, start_sla=False):
     snapshot = Ticket.objects.get(pk=ticket_id)
     Contact.objects.select_for_update().get(pk=snapshot.contact_id)
     ticket = Ticket.objects.select_for_update().select_related('contact', 'company').get(pk=ticket_id)
@@ -283,10 +286,30 @@ def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision
         raise ValidationError('Descreva a atualização ou solução aplicada.')
     if internal and status != ticket.status:
         raise ValidationError('Mudanças de status são públicas. Use uma anotação separada para conteúdo interno.')
+    if priority is not None and priority not in dict(ticket._meta.get_field('priority').choices):
+        raise ValidationError('Prioridade inválida.')
+    if category is not None and category not in dict(Ticket.CATEGORIES):
+        raise ValidationError('Categoria inválida.')
+    previous_sla = {name: getattr(ticket, name).isoformat() if getattr(ticket, name) else None
+                    for name in ('sla_started_at', 'response_due_at', 'resolution_due_at', 'first_responded_at', 'resolved_at')}
+    previous_priority, previous_category = ticket.priority, ticket.category
+    ticket.priority = priority or ticket.priority
+    ticket.category = category or ticket.category
     previous = ticket.status
     ticket.status, ticket.assigned_to = status, assigned_to
     ticket.revision += 1
     now = timezone.now()
+    reopened = status in OPEN and previous in ('resolved', 'closed', 'cancelled')
+    if previous not in OPEN and not reopened and ticket.priority != previous_priority:
+        raise ValidationError('Reabra o chamado antes de alterar a prioridade; os prazos concluídos são preservados.')
+    if reopened or (start_sla and not ticket.sla_started_at):
+        if status not in OPEN:
+            raise ValidationError('Inicie o SLA apenas em um chamado em aberto.')
+        initialize_sla(ticket, now)
+    elif ticket.sla_started_at and ticket.priority != previous_priority:
+        reprioritize(ticket)
+    if not internal and ticket.sla_started_at and not ticket.first_responded_at:
+        ticket.first_responded_at = now
     changed_resolution = status in ('resolved', 'closed') and previous not in ('resolved', 'closed')
     if changed_resolution:
         ticket.resolved_at = now
@@ -305,5 +328,13 @@ def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision
                 state='idle', draft={}, expires_at=None)
         queue(ticket.contact, body, f'update:{update.pk}', ticket, ticket.company_id, ticket.requester_phone)
     audit(actor.get_username(), 'support_update', ticket, {'update': update.pk, 'from': previous,
-          'to': status, 'internal': internal, 'assigned_to': assigned_to.pk if assigned_to else None})
+          'to': status, 'internal': internal, 'assigned_to': assigned_to.pk if assigned_to else None,
+          'priority_from': previous_priority, 'priority_to': ticket.priority,
+          'category_from': previous_category, 'category_to': ticket.category,
+          'sla_started_at': ticket.sla_started_at.isoformat() if ticket.sla_started_at else None,
+          'response_due_at': ticket.response_due_at.isoformat() if ticket.response_due_at else None,
+          'resolution_due_at': ticket.resolution_due_at.isoformat() if ticket.resolution_due_at else None,
+          'sla_reopened': reopened, 'sla_before': previous_sla,
+          'first_responded_at': ticket.first_responded_at.isoformat() if ticket.first_responded_at else None,
+          'resolved_at': ticket.resolved_at.isoformat() if ticket.resolved_at else None})
     return ticket

@@ -4,14 +4,16 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError
 from django.db.models import Count, Q, Sum, OuterRef, Subquery
-from django.http import HttpResponse
+from django.http import HttpResponse, FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from .models import (Company, Ticket, Asset, Maintenance, KnowledgeArticle, KnowledgeSuggestion, Problem,
-    CompanySlaConfig, SlaAgentProfile, SlaAlert)
+    CompanySlaConfig, SlaAgentProfile, SlaAlert, AssetAttachment)
 from .forms import AssetForm, MaintenanceForm, KnowledgeForm, ProblemForm, CompanySlaForm, SlaAgentForm
 from .services import company_ids, audit
+from .asset_uploads import prepare_attachment
+from django.core.exceptions import ValidationError
 
 staff = user_passes_test(lambda u:u.is_active and u.is_staff)
 master = user_passes_test(lambda u:u.is_active and u.is_superuser)
@@ -36,7 +38,7 @@ def assets(request):
         items = items.filter(company__code=request.GET['company'])
     if request.GET.get('q'):
         q = request.GET['q'][:150]
-        items = items.filter(Q(tag__icontains=q)|Q(name__icontains=q)|Q(serial__icontains=q)|Q(location__icontains=q))
+        items = items.filter(Q(tag__icontains=q)|Q(invoice_number__icontains=q)|Q(name__icontains=q)|Q(serial__icontains=q)|Q(location__icontains=q))
     return render(request,'helpdesk/assets.html',{'items':Paginator(items,30).get_page(request.GET.get('page')),
         'companies':companies(request.user),'asset_count':items.count(),
         'maintenance_due':items.filter(next_maintenance__lt=timezone.localdate()).exclude(state='retired').count()})
@@ -48,8 +50,36 @@ def assets(request):
 def asset_detail(request,asset_id=None):
     item = get_object_or_404(assets_query(request.user),pk=asset_id) if asset_id else None
     maintenance = MaintenanceForm(request.POST if request.method=='POST' and request.POST.get('action')=='maintenance' else None)
-    form = AssetForm(request.POST if request.method=='POST' and request.POST.get('action')!='maintenance' else None,
+    form = AssetForm(request.POST if request.method=='POST' and request.POST.get('action') not in ('maintenance', 'attachment') else None,
                      instance=item,companies=companies(request.user))
+    if request.method=='POST' and request.POST.get('action')=='attachment':
+        if not item:
+            return HttpResponse(status=400)
+        upload = request.FILES.get('file')
+        kind = request.POST.get('kind')
+        if not upload:
+            messages.error(request, 'Selecione uma imagem ou PDF.')
+        elif kind not in ('photo', 'signed_term', 'document'):
+            messages.error(request, 'Tipo de anexo inválido.')
+        else:
+            try:
+                content, filename = prepare_attachment(upload, kind)
+                with transaction.atomic():
+                    Asset.objects.select_for_update().get(pk=item.pk)
+                    attachment = AssetAttachment(asset=item, kind=kind, original_name=filename,
+                        size_bytes=content.size, uploaded_by=request.user.get_username())
+                    attachment.file.save(content.name, content, save=False)
+                    try:
+                        attachment.save()
+                    except Exception:
+                        attachment.file.delete(save=False)
+                        raise
+                    audit(request.user.get_username(), 'support_asset_attachment', attachment,
+                          {'asset':item.pk,'type':kind,'bytes':content.size})
+                messages.success(request, 'Arquivo anexado e protegido por permissão.')
+                return redirect(f'/support/assets/{item.pk}/')
+            except ValidationError as exc:
+                messages.error(request, '; '.join(exc.messages))
     if request.method=='POST':
         if request.POST.get('action')=='maintenance' and item and maintenance.is_valid():
             with transaction.atomic():
@@ -60,7 +90,7 @@ def asset_detail(request,asset_id=None):
                 audit(request.user.get_username(),'support_maintenance',record,{'asset':item.pk,'date':str(record.date),'cost':str(record.cost)})
             messages.success(request,'Manutenção registrada no histórico do equipamento.')
             return redirect(f'/support/assets/{item.pk}/')
-        elif request.POST.get('action')!='maintenance' and form.is_valid():
+        elif request.POST.get('action') not in ('maintenance','attachment') and form.is_valid():
             try:
                 with transaction.atomic():
                     Company.objects.select_for_update().get(pk=form.cleaned_data['company'].pk)
@@ -71,7 +101,7 @@ def asset_detail(request,asset_id=None):
             except IntegrityError:
                 form.add_error('tag','Essa identificação já existe nesta empresa.')
     return render(request,'helpdesk/asset_detail.html',{'item':item,'form':form,'maintenance_form':maintenance,
-        'history':item.maintenance.all() if item else [], 'tickets':item.tickets.order_by('-id')[:30] if item else []})
+        'history':item.maintenance.all() if item else [], 'attachments':item.attachments.all() if item else [], 'tickets':item.tickets.order_by('-id')[:30] if item else []})
 
 
 @login_required
@@ -205,3 +235,21 @@ def alerts(request):
         items=items.filter(kind='weekly')
     return render(request,'helpdesk/sla_alerts.html',{'items':Paginator(items.order_by('-id'),30).get_page(request.GET.get('page')),
         'companies':companies(request.user),'pending_count':items.filter(status__in=('pending','blocked')).count()})
+
+
+@login_required
+@staff
+@never_cache
+def asset_attachment(request, attachment_id):
+    attachment = get_object_or_404(
+        AssetAttachment.objects.select_related('asset'),
+        pk=attachment_id, asset__company__in=companies(request.user))
+    try:
+        stream = attachment.file.open('rb')
+    except (OSError, ValueError):
+        raise Http404('Arquivo indisponível')
+    response = FileResponse(stream, as_attachment=True, filename=attachment.original_name)
+    response['Content-Type'] = 'image/webp' if attachment.kind == 'photo' else 'application/pdf'
+    response['X-Content-Type-Options'] = 'nosniff'
+    response['Cache-Control'] = 'private, no-store'
+    return response

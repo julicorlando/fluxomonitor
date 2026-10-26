@@ -174,10 +174,10 @@ class ScopedForm(forms.ModelForm):
 class AssetForm(ScopedForm):
     class Meta:
         model = Asset
-        fields = ['company','tag','name','kind','state','contact','serial','location','notes']
-        labels = {'company':'Empresa','tag':'Patrimônio / identificação','name':'Equipamento','kind':'Tipo','state':'Situação',
+        fields = ['company','tag','invoice_number','acquisition_date','name','kind','state','contact','serial','location','notes']
+        labels = {'company':'Empresa','tag':'Patrimônio / identificação','invoice_number':'Número da NF','acquisition_date':'Data da aquisição','name':'Equipamento','kind':'Tipo','state':'Situação',
                   'contact':'Colaborador responsável','serial':'Número de série','location':'Localização','notes':'Observações'}
-        widgets = {'notes':forms.Textarea(attrs={'rows':3})}
+        widgets = {'notes':forms.Textarea(attrs={'rows':3}), 'acquisition_date':forms.DateInput(attrs={'type':'date'}, format='%Y-%m-%d')}
     def __init__(self,*args,companies,**kwargs):
         super().__init__(*args,companies=companies,**kwargs)
         company_id = self.instance.company_id or (self.data.get('company') if self.is_bound else None)
@@ -186,6 +186,10 @@ class AssetForm(ScopedForm):
             self.fields['contact'].queryset = self.fields['contact'].queryset.filter(company_id=company_id)
     def clean(self):
         data = super().clean()
+        if not self.instance.pk:
+            for field in ('tag', 'invoice_number', 'acquisition_date'):
+                if not data.get(field):
+                    self.add_error(field, 'Obrigatório no cadastro de novo equipamento.')
         if data.get('contact') and data.get('company') and data['contact'].company_id != data['company'].pk:
             self.add_error('contact','O colaborador deve pertencer à empresa do equipamento.')
         return data

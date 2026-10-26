@@ -206,7 +206,7 @@ class SupportSuiteTests(TestCase):
         self.assertFalse(SlaAlert.objects.filter(kind='weekly').exists())
 
     def test_inventory_form_maintenance_and_linked_ticket(self):
-        data={'company':self.company.pk,'tag':'FIN-01','name':'Computador Financeiro','kind':'computer','state':'active',
+        data={'company':self.company.pk,'tag':'FIN-01','invoice_number':'NF-12345','acquisition_date':'2026-10-20','name':'Computador Financeiro','kind':'computer','state':'active',
             'contact':self.contact.pk,'serial':'SERIAL-001','location':'Financeiro','notes':''}
         self.assertEqual(self.client.post('/support/assets/new/',data).status_code,302)
         asset=Asset.objects.get()

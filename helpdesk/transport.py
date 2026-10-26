@@ -106,6 +106,23 @@ def resolve_phone(payload):
         if identity:
             return identity.phone
 
+        # Contact lookup uses a different NOWEB path than /lids and can expose
+        # the verified PN held by Baileys even when /lids returns pn=null.
+        # A contact name or freeform message is never sufficient for identity.
+        from urllib.parse import urlencode
+        lookup = gateway('GET', '/api/contacts?' + urlencode({
+            'contactId': sender, 'session': 'default'}))
+        if isinstance(lookup, dict):
+            number = lookup.get('number')
+            candidate = phone_from_chat(number + '@c.us') if isinstance(number, str) and number.isdecimal() else None
+            if candidate and Contact.objects.filter(phone=candidate, active=True).exists():
+                # Cache only a mapping supplied by WAHA contact resolution.
+                matched = Contact.objects.get(phone=candidate, active=True)
+                VerifiedChatIdentity.objects.update_or_create(contact=matched, defaults={
+                    'phone': matched.phone, 'chat_id': sender})
+                logging.info('Suporte WAHA: LID resolvido por consulta de contato, contact=%s', matched.pk)
+                return candidate
+
         # NOWEB may omit the phone in /lids even when chatId resolves on WAHA.
         # Only accept an exact, unique, independently verified chatId match.
         from urllib.parse import urlencode

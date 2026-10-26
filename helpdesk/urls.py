@@ -1,9 +1,15 @@
 from django.urls import path
-from . import views, suite_views as suite
+from . import views, suite_views as suite, inventory_views as inventory
 
 urlpatterns = [
     path('', views.home),
     path('assets/',suite.assets),
+    path('assets/dashboard/',inventory.overview),
+    path('assets/<int:pk>/transfer/',inventory.movement),
+    path('assets/<int:pk>/check/',inventory.check),
+    path('assets/<int:pk>/disposal/',inventory.disposal),
+    path('assets/<int:pk>/qr/',inventory.qr_code),
+    path('assets/<int:pk>/term/',inventory.responsibility_term),
     path('assets/import/',suite.import_assets),
     path('assets/attachments/<int:attachment_id>/',suite.asset_attachment),
     path('assets/new/',suite.asset_detail),

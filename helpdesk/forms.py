@@ -174,10 +174,10 @@ class ScopedForm(forms.ModelForm):
 class AssetForm(ScopedForm):
     class Meta:
         model = Asset
-        fields = ['company','tag','invoice_number','acquisition_date','name','kind','state','contact','serial','location','notes']
-        labels = {'company':'Empresa','tag':'Patrimônio / identificação','invoice_number':'Número da NF','acquisition_date':'Data da aquisição','name':'Equipamento','kind':'Tipo','state':'Situação',
+        fields = ['company','tag','invoice_number','acquisition_date','product_code','warranty_expires_at','purchase_value','tech_specs','name','kind','state','contact','serial','location','notes']
+        labels = {'company':'Empresa','tag':'Patrimônio / identificação','invoice_number':'Número da NF','acquisition_date':'Data da aquisição','product_code':'CÓD PRPOD (código do produto)','warranty_expires_at':'Fim da garantia','purchase_value':'Valor de aquisição','tech_specs':'Ficha técnica (JSON)','name':'Equipamento','kind':'Tipo','state':'Situação',
                   'contact':'Colaborador responsável','serial':'Número de série','location':'Localização','notes':'Observações'}
-        widgets = {'notes':forms.Textarea(attrs={'rows':3}), 'acquisition_date':forms.DateInput(attrs={'type':'date'}, format='%Y-%m-%d')}
+        widgets = {'notes':forms.Textarea(attrs={'rows':3}), 'acquisition_date':forms.DateInput(attrs={'type':'date'}, format='%Y-%m-%d'), 'warranty_expires_at':forms.DateInput(attrs={'type':'date'}, format='%Y-%m-%d'), 'tech_specs':forms.Textarea(attrs={'rows':4})}
     def __init__(self,*args,companies,**kwargs):
         super().__init__(*args,companies=companies,**kwargs)
         company_id = self.instance.company_id or (self.data.get('company') if self.is_bound else None)
@@ -186,6 +186,11 @@ class AssetForm(ScopedForm):
             self.fields['contact'].queryset = self.fields['contact'].queryset.filter(company_id=company_id)
     def clean(self):
         data = super().clean()
+        if self.instance.pk:
+            for field in ('company', 'contact', 'location'):
+                current = getattr(self.instance, field)
+                if data.get(field) != current:
+                    self.add_error(field, 'Use a movimentação auditada para alterar empresa, responsável ou local.')
         if not self.instance.pk:
             for field in ('tag', 'invoice_number', 'acquisition_date'):
                 if not data.get(field):
@@ -193,6 +198,41 @@ class AssetForm(ScopedForm):
         if data.get('contact') and data.get('company') and data['contact'].company_id != data['company'].pk:
             self.add_error('contact','O colaborador deve pertencer à empresa do equipamento.')
         return data
+
+
+class AssetMovementForm(forms.Form):
+    action = forms.ChoiceField(label='Movimentação', choices=[('handover','Entrega'),('return','Devolução'),('transfer','Transferência'),('loan','Empréstimo')])
+    company = forms.ModelChoiceField(label='Empresa de destino', queryset=Company.objects.none())
+    contact = forms.ModelChoiceField(label='Responsável de destino',queryset=Contact.objects.none(),required=False)
+    location = forms.CharField(label='Localização de destino',max_length=200,required=False)
+    reason = forms.CharField(label='Justificativa e autorização',max_length=2000,widget=forms.Textarea(attrs={'rows':2}))
+    def __init__(self,*args,companies,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields['company'].queryset=companies
+        self.fields['contact'].queryset=Contact.objects.filter(company__in=companies,active=True)
+    def clean(self):
+        data=super().clean()
+        if data.get('contact') and data.get('company') and data['contact'].company_id!=data['company'].pk:
+            self.add_error('contact','Responsável não pertence à empresa de destino.')
+        return data
+
+
+class InventoryCheckForm(forms.Form):
+    found=forms.BooleanField(label='Equipamento localizado',required=False)
+    location=forms.CharField(label='Localização conferida',max_length=200,required=False)
+    notes=forms.CharField(label='Observações',max_length=1000,required=False,widget=forms.Textarea(attrs={'rows':2}))
+
+
+class AssetDisposalForm(forms.Form):
+    reason=forms.CharField(label='Motivo e autorização formal',max_length=2000,widget=forms.Textarea(attrs={'rows':3}))
+    disposed_on=forms.DateField(label='Data da baixa',widget=forms.DateInput(attrs={'type':'date'}))
+    data_sanitized=forms.BooleanField(label='Confirme a sanitização dos dados (quando aplicável)',required=False)
+    def clean_disposed_on(self):
+        from django.utils import timezone
+        value=self.cleaned_data['disposed_on']
+        if value>timezone.localdate():
+            raise forms.ValidationError('Data de baixa não pode ser futura.')
+        return value
 
 
 class MaintenanceForm(forms.ModelForm):

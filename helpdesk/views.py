@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 from datetime import timedelta
 from uuid import uuid4
 from django.contrib import messages
@@ -16,7 +17,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import ContactForm, GrantForm, UpdateForm
-from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound
+from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound, VerifiedChatIdentity
 from .services import OPEN, audit, company_ids, update_ticket, menu
 from .transport import receive_event, valid_signature
 
@@ -240,6 +241,37 @@ def master_inbox(request, contact_id=None):
         if not selected:
             return HttpResponse(status=400)
         action = request.POST.get('action', 'reply')
+        if action == 'verify_lid':
+            lid = request.POST.get('lid', '')
+            # The operator must independently verify identity, e.g. direct phone call.
+            confirmed = request.POST.get('identity_confirmed') == 'yes'
+            if not confirmed or not re.fullmatch(r'[0-9]+@lid', lid):
+                messages.error(request, 'Confirme a identidade do titular por canal independente e informe um LID válido.')
+                return redirect(f'/support/inbox/{selected.pk}/')
+            with transaction.atomic():
+                contact = Contact.objects.select_for_update().get(pk=selected.pk)
+                pending = list(UnresolvedInbound.objects.select_for_update().filter(
+                    sender=lid, status='unresolved', sent_at__gte=timezone.now() - timedelta(hours=24)
+                ).order_by('sent_at', 'id'))
+                conflicts = VerifiedChatIdentity.objects.filter(chat_id=lid).exclude(contact=contact).exists()
+                if not contact.active or conflicts or not pending:
+                    messages.error(request, 'Vínculo não permitido: cadastro inativo, LID já associado ou nenhuma mensagem recente pendente.')
+                else:
+                    VerifiedChatIdentity.objects.update_or_create(contact=contact, defaults={
+                        'phone': contact.phone, 'chat_id': lid})
+                    imported = 0
+                    for event in pending:
+                        _, created = Inbound.objects.get_or_create(external_id=event.external_id, defaults={
+                            'contact': contact, 'company': contact.company, 'phone': contact.phone,
+                            'text': event.text, 'sent_at': event.sent_at})
+                        event.status = 'linked'
+                        event.save(update_fields=['status', 'last_seen_at'])
+                        imported += int(created)
+                    audit(request.user.get_username(), 'support_lid_verified', contact,
+                          {'lid': lid, 'contact_id': contact.pk, 'messages_imported': imported,
+                           'verification': 'master_confirmed_out_of_band'})
+                    messages.success(request, f'Identidade vinculada. {imported} mensagem(ns) encaminhada(s) ao bot.')
+            return redirect(f'/support/inbox/{selected.pk}/')
         if action == 'restart_bot':
             with transaction.atomic():
                 contact = Contact.objects.select_for_update().select_related('company').get(pk=selected.pk)

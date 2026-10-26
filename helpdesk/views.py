@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 from datetime import timedelta
+from uuid import uuid4
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.exceptions import ValidationError
@@ -226,3 +227,38 @@ def update_api(request, ticket_id):
     except ValidationError as exc:
         return JsonResponse({'errors': exc.messages}, status=409)
     return JsonResponse({'id': ticket.pk, 'code': ticket.code, 'status': ticket.status, 'revision': ticket.revision})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_active and u.is_superuser)
+@never_cache
+def master_inbox(request, contact_id=None):
+    """Restricted conversation console. No external WhatsApp request on the HTTP thread."""
+    contacts = Contact.objects.filter(active=True).select_related('company').order_by('name')
+    selected = get_object_or_404(contacts, pk=contact_id) if contact_id else None
+    if request.method == 'POST':
+        if not selected:
+            return HttpResponse(status=400)
+        body = request.POST.get('text', '').strip()
+        if not body or len(body) > 4000:
+            messages.error(request, 'Informe uma resposta de até 4.000 caracteres.')
+        else:
+            with transaction.atomic():
+                contact = Contact.objects.select_for_update().get(pk=selected.pk)
+                if not contact.active or not BotConfig.objects.filter(pk=1, enabled=True).exists():
+                    messages.error(request, 'Colaborador inativo ou atendimento pausado. Nada foi enviado.')
+                else:
+                    Outbound.objects.create(
+                        contact=contact, company=contact.company, phone=contact.phone,
+                        text=body, key='master:' + uuid4().hex)
+                    messages.success(request, 'Resposta colocada na fila do WhatsApp.')
+            return redirect(f'/support/inbox/{selected.pk}/')
+    incoming = Inbound.objects.filter(contact=selected).order_by('-id')[:100] if selected else []
+    outgoing = Outbound.objects.filter(contact=selected).order_by('-id')[:100] if selected else []
+    history = sorted(
+        [(m.sent_at, 'in', m) for m in incoming] +
+        [(m.created_at, 'out', m) for m in outgoing],
+        key=lambda item: (item[0], item[2].pk))
+    return render(request, 'helpdesk/master_inbox.html', {
+        'contacts': contacts, 'selected': selected, 'history': history,
+    })

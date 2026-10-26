@@ -467,3 +467,21 @@ class HelpdeskTests(TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertFalse(Inbound.objects.exists())
         self.assertFalse(Outbound.objects.exists())
+
+    @patch('helpdesk.transport.session_info', return_value={'status': 'WORKING'})
+    @patch('helpdesk.transport.gateway', return_value={})
+    def test_gateway_without_message_id_records_specific_diagnostic(self, gateway, info):
+        self.say('Oi')
+        dispatch()
+        item = Outbound.objects.get()
+        self.assertEqual(item.status, 'unknown')
+        self.assertIn('sem ID', item.detail)
+
+    @patch('helpdesk.transport.session_info', return_value={'status': 'WORKING'})
+    @patch('helpdesk.transport.gateway', side_effect=HTTPError('http://waha', 500, 'error', {}, None))
+    def test_gateway_http_500_records_status_without_retry(self, gateway, info):
+        self.say('Oi')
+        dispatch()
+        item = Outbound.objects.get()
+        self.assertEqual(item.status, 'unknown')
+        self.assertIn('HTTP 500', item.detail)

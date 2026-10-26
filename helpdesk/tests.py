@@ -620,7 +620,7 @@ class HelpdeskTests(TestCase):
         self.assertEqual(Conversation.objects.get().state, 'offer')
         self.assertEqual(Ticket.objects.count(), 0)
         self.assertEqual(Outbound.objects.count(), before + 1)
-        self.assertIn('1 — Abrir novo chamado', Outbound.objects.latest('pk').text)
+        self.assertIn('1 — Sim', Outbound.objects.latest('pk').text)
         self.say('1')
         self.assertEqual(Conversation.objects.get().state, 'target')
         self.assertEqual(Ticket.objects.count(), 0)

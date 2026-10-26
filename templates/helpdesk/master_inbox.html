@@ -17,11 +17,21 @@
     {% if selected %}
       <h2>{{ selected.name }}</h2>
       <p class="muted">{{ selected.company.code }} · {{ selected.phone }} · {{ selected.email }}</p>
+      <section class="box">
+        <h3>Atendimento automático</h3>
+        <p>Estado atual: <strong>{{ conversation.state|default:"Aguardando primeira mensagem" }}</strong> · Mensagens recebidas aguardando processamento: <strong>{{ inbound_pending }}</strong></p>
+        {% if conversation.state == 'human' %}<p>Atendimento humano ativo: o bot não responde automaticamente enquanto este estado estiver em vigor.</p>{% endif %}
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="restart_bot">
+          <button type="submit">Reativar bot e enviar menu</button>
+        </form>
+        <p class="muted">Reinicia apenas a conversa deste colaborador. Não apaga nem reabre chamados existentes.</p>
+      </section>
       <div aria-label="Histórico de mensagens" style="max-height:55vh;overflow:auto">
         {% for date, direction, entry in history %}
           <div style="padding:12px;margin:8px 0;border:1px solid var(--border,#ddd);border-radius:10px">
             <div><strong>{% if direction == 'in' %}Colaborador{% else %}GesTi / atendimento{% endif %}</strong> <small>{{ date|date:'d/m/Y H:i:s' }}</small></div>
             <p style="white-space:pre-wrap;overflow-wrap:anywhere">{{ entry.text }}</p>
+            {% if direction == 'in' %}<small>{% if entry.processed_at %}Processada pelo bot{% else %}Pendente de processamento{% endif %}{% if entry.error %} · {{ entry.error }}{% endif %}</small>{% endif %}
             {% if direction == 'out' %}<small>Situação: {{ entry.get_status_display }}{% if entry.detail %} · {{ entry.detail }}{% endif %}</small>{% endif %}
           </div>
         {% empty %}<p>Nenhuma mensagem registrada desse colaborador.</p>{% endfor %}

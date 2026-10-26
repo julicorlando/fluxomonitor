@@ -1,0 +1,26 @@
+{% extends 'helpdesk/suite_base.html' %}
+{% block title %}GesTi · Importar patrimônio legado{% endblock %}
+{% block suite_content %}
+<header class="page-heading"><div><span class="eyebrow">Administração / Inventário</span>
+<h1>Importar 210 patrimônios</h1>
+<p>Importação segura do dump legado. Confirme a empresa dos cinco registros sem departamento; nenhum registro será importado se algum deles ficar sem empresa.</p></div>
+<a class="button secondary" href="/support/assets/">Voltar ao inventário</a></header>
+{% include 'helpdesk/tabs.html' %}
+<article class="it-panel">
+<form method="post" enctype="multipart/form-data">
+{% csrf_token %}
+<p><label>Arquivo CSV com 210 patrimônios<input type="file" name="inventory_csv" accept=".csv,text/csv" required></label></p>
+<h2>Patrimônios sem departamento no banco original</h2>
+<p class="it-caption">Confira na documentação interna antes de determinar a empresa. O sistema não atribui automaticamente para evitar exposição de patrimônios a empresas erradas.</p>
+{% for source_id, tag in pending %}
+<p><label>Registro legado {{ source_id }} · Patrimônio {{ tag }}
+<select name="company_{{ source_id }}" required>
+<option value="">Selecione a empresa correta</option>
+{% for company in companies %}<option value="{{ company.code }}">{{ company.code }} · {{ company.name }}</option>{% endfor %}
+</select></label></p>
+{% endfor %}
+<button type="submit">Conferir e importar os 210 registros</button>
+</form>
+<p class="it-caption">O importador confere as 210 linhas, exige patrimônio, NF e data, impede duplicidades e não sobrescreve equipamentos existentes. Faça backup do PostgreSQL antes da importação.</p>
+</article>
+{% endblock %}

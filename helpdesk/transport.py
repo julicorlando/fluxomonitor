@@ -105,8 +105,32 @@ def resolve_phone(payload):
             phone=models.F('contact__phone')).select_related('contact').first()
         if identity:
             return identity.phone
-        # A NOWEB contact-store sync may be pending. Return 503 from the webhook
-        # so WAHA retries rather than silently and permanently discarding the event.
+
+        # NOWEB may omit the phone in /lids even when chatId resolves on WAHA.
+        # Only accept an exact, unique, independently verified chatId match.
+        from urllib.parse import urlencode
+        matches = []
+        for enrolled in Contact.objects.filter(active=True).only('id', 'phone').iterator():
+            if not enrolled.phone.startswith('+55'):
+                continue
+            check = gateway('GET', '/api/contacts/check-exists?' + urlencode({
+                'phone': enrolled.phone.lstrip('+'), 'session': 'default'}))
+            if not isinstance(check, dict) or check.get('numberExists') is not True:
+                continue
+            if check.get('chatId') != sender:
+                continue
+            pn = check.get('pn')
+            if pn and phone_from_chat(pn) != enrolled.phone:
+                continue
+            matches.append(enrolled)
+            if len(matches) > 1:
+                break
+        if len(matches) == 1:
+            enrolled = matches[0]
+            VerifiedChatIdentity.objects.update_or_create(contact=enrolled, defaults={
+                'phone': enrolled.phone, 'chat_id': sender})
+            logging.info('Suporte WAHA: LID resolvido por check-exists, contact=%s', enrolled.pk)
+            return enrolled.phone
         raise ValidationError('LID ainda não resolvido; aguardar sincronização e repetir webhook.')
     return phone
 

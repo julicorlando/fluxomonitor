@@ -536,3 +536,32 @@ class HelpdeskTests(TestCase):
         response = self.client.post(f'/support/inbox/{self.contact.pk}/', {'action': 'restart_bot'})
         self.assertEqual(response.status_code, 302)
         self.assertFalse(Outbound.objects.filter(key__startswith='master-bot-menu:').exists())
+
+    @patch('helpdesk.transport.gateway')
+    def test_unresolved_lid_recovers_only_exact_verified_chat_id(self, gateway):
+        lid = '262453002793117@lid'
+        def response(method, path, *args):
+            if '/lids/' in path:
+                return {'pn': None}
+            if 'check-exists' in path:
+                return {'numberExists': True, 'chatId': lid if self.contact.phone[1:] in path else self.other.phone[1:] + '@c.us', 'pn': self.contact.phone[1:] + '@c.us' if self.contact.phone[1:] in path else self.other.phone[1:] + '@c.us'}
+            raise AssertionError(path)
+        gateway.side_effect = response
+        event = self.payload('Oi', **{'from': lid})
+        receive_event(event)
+        self.assertTrue(Inbound.objects.filter(external_id=event['payload']['id']).exists())
+        self.assertEqual(self.contact.verified_chat.chat_id, lid)
+
+    @patch('helpdesk.transport.gateway')
+    def test_unresolved_lid_does_not_assume_phone_when_check_exists_returns_pn_chat(self, gateway):
+        lid = '262453002793117@lid'
+        def response(method, path, *args):
+            if '/lids/' in path:
+                return {'pn': None}
+            if 'check-exists' in path:
+                return {'numberExists': True, 'chatId': self.contact.phone[1:] + '@c.us'}
+            raise AssertionError(path)
+        gateway.side_effect = response
+        with self.assertRaises(ValidationError):
+            receive_event(self.payload('Oi', **{'from': lid}))
+        self.assertFalse(Inbound.objects.exists())

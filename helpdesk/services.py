@@ -163,7 +163,7 @@ def process_message(message_id):
     # avaliação pendente: não iniciar, retomar ou responder pelo chatbot.
     if session.state == 'human':
         pass
-    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or session.state in ('idle', 'offer')):
+    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or (session.state in ('idle', 'offer') and not surveys.exists())):
         session.state, session.draft = 'human', {}
         audit(contact.name, 'support_human_only', session, {'contact_id': contact.pk})
     elif rating or generic_rating:

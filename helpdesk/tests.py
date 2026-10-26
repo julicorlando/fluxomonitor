@@ -11,7 +11,7 @@ from django.utils import timezone
 from flow.models import AuditLog, WhatsAppDelivery
 from .forms import ContactForm
 from .models import (AgentGrant, BotConfig, Company, Contact, Conversation, DeliveryAck,
-                     Inbound, Outbound, Satisfaction, Ticket, TicketUpdate)
+                     Inbound, Outbound, Satisfaction, Ticket, TicketUpdate, UnresolvedInbound)
 from .services import process_message, update_ticket
 from .transport import dispatch, ensure_webhook, hook_key, receive_event
 
@@ -604,3 +604,40 @@ class HelpdeskTests(TestCase):
         with self.assertRaises(ValidationError):
             receive_event(self.payload('Oi', **{'from': lid}))
         self.assertFalse(Inbound.objects.exists())
+
+    @patch('helpdesk.transport.gateway')
+    def test_unresolved_lid_arrives_in_master_triage_without_bot_ticket(self, gateway):
+        lid = '262453002793117@lid'
+        def response(method, path, *args):
+            if '/lids/' in path:
+                return {'pn': None}
+            if path.startswith('/api/contacts?'):
+                return {'number': None}
+            if 'check-exists' in path:
+                return {'numberExists': False}
+            raise AssertionError(path)
+        gateway.side_effect = response
+        event = self.payload('1', **{'from': lid})
+        self.assertEqual(self.signed_post(event).status_code, 204)
+        self.assertEqual(UnresolvedInbound.objects.count(), 1)
+        pending = UnresolvedInbound.objects.get()
+        self.assertEqual(pending.text, '1')
+        self.assertEqual(pending.sender, lid)
+        self.assertFalse(Inbound.objects.exists())
+        self.assertFalse(Ticket.objects.exists())
+        self.assertFalse(Outbound.objects.exists())
+        self.assertEqual(self.signed_post(event).status_code, 204)
+        self.assertEqual(UnresolvedInbound.objects.count(), 1)
+        self.client.force_login(self.root)
+        response = self.client.get('/support/inbox/')
+        self.assertContains(response, 'Triagem de mensagens recebidas')
+        self.assertContains(response, lid)
+        self.assertContains(response, '1')
+
+    @patch('helpdesk.transport.gateway')
+    def test_unresolved_lid_not_visible_to_agent(self, gateway):
+        gateway.side_effect = lambda method, path, *args: {'pn': None} if '/lids/' in path else (
+            {'number': None} if path.startswith('/api/contacts?') else {'numberExists': False})
+        self.assertEqual(self.signed_post(self.payload('Teste', **{'from': '262453002793117@lid'})).status_code, 204)
+        self.client.force_login(self.agent)
+        self.assertNotEqual(self.client.get('/support/inbox/').status_code, 200)

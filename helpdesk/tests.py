@@ -642,3 +642,35 @@ class HelpdeskTests(TestCase):
         self.assertEqual(self.signed_post(self.payload('Teste', **{'from': '262453002793117@lid'})).status_code, 204)
         self.client.force_login(self.agent)
         self.assertNotEqual(self.client.get('/support/inbox/').status_code, 200)
+
+    def test_master_can_link_verified_lid_and_resume_bot(self):
+        from .models import UnresolvedInbound, VerifiedChatIdentity
+        lid = '262453002793117@lid'
+        event = UnresolvedInbound.objects.create(
+            external_id='lid-123-test', sender=lid, text='1', sent_at=timezone.now())
+        self.client.force_login(self.root)
+        url = f'/support/inbox/{self.contact.pk}/'
+        denied = self.client.post(url, {'action': 'verify_lid', 'lid': lid})
+        self.assertEqual(denied.status_code, 302)
+        self.assertFalse(VerifiedChatIdentity.objects.exists())
+        allowed = self.client.post(url, {'action': 'verify_lid', 'lid': lid, 'identity_confirmed': 'yes'})
+        self.assertEqual(allowed.status_code, 302)
+        self.assertEqual(VerifiedChatIdentity.objects.get(contact=self.contact).chat_id, lid)
+        item = Inbound.objects.get(external_id=event.external_id)
+        self.assertEqual(item.contact, self.contact)
+        self.assertEqual(UnresolvedInbound.objects.get(pk=event.pk).status, 'linked')
+        self.assertTrue(AuditLog.objects.filter(action='support_lid_verified').exists())
+        again = self.client.post(url, {'action': 'verify_lid', 'lid': lid, 'identity_confirmed': 'yes'})
+        self.assertEqual(again.status_code, 302)
+        self.assertEqual(Inbound.objects.filter(external_id=event.external_id).count(), 1)
+
+    def test_lid_cannot_be_linked_to_two_different_contacts(self):
+        from .models import UnresolvedInbound, VerifiedChatIdentity
+        lid = '262453002793117@lid'
+        UnresolvedInbound.objects.create(external_id='lid-dup', sender=lid, text='1', sent_at=timezone.now())
+        VerifiedChatIdentity.objects.create(contact=self.other, phone=self.other.phone, chat_id=lid)
+        self.client.force_login(self.root)
+        response = self.client.post(f'/support/inbox/{self.contact.pk}/', {
+            'action': 'verify_lid', 'lid': lid, 'identity_confirmed': 'yes'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Inbound.objects.filter(external_id='lid-dup').exists())

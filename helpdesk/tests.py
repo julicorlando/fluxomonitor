@@ -437,3 +437,33 @@ class HelpdeskTests(TestCase):
         info.return_value = {'status': 'WORKING', 'engine': 'WEBJS', 'config': {}}
         ensure_webhook()
         self.assertNotIn('noweb', gateway.call_args.args[2]['config'])
+
+
+    def test_master_inbox_private_and_manual_reply_is_queued(self):
+        self.say('Oi')
+        page = self.client.get('/support/inbox/')
+        self.assertEqual(page.status_code, 200)
+        page = self.client.get(f'/support/inbox/{self.contact.pk}/')
+        self.assertContains(page, 'Oi')
+        response = self.client.post(f'/support/inbox/{self.contact.pk}/', {'text': 'Recebido, vou verificar.'})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Outbound.objects.filter(key__startswith='master:').count(), 1)
+        self.assertEqual(Outbound.objects.filter(key__startswith='master:').first().status, 'pending')
+        self.client.force_login(self.agent)
+        self.assertEqual(self.client.get('/support/inbox/').status_code, 302)
+        self.assertEqual(self.client.post(f'/support/inbox/{self.contact.pk}/', {'text': 'Não autorizado'}).status_code, 302)
+        self.assertEqual(Outbound.objects.filter(key__startswith='master:').count(), 1)
+
+    def test_master_inbox_never_sends_to_inactive_contact(self):
+        self.contact.active = False
+        self.contact.save(update_fields=['active'])
+        self.assertEqual(self.client.get(f'/support/inbox/{self.contact.pk}/').status_code, 404)
+        self.assertEqual(self.client.post(f'/support/inbox/{self.contact.pk}/', {'text':'Olá'}).status_code, 404)
+        self.assertFalse(Outbound.objects.filter(key__startswith='master:').exists())
+
+    @patch('helpdesk.transport.gateway', return_value={'lid': '1234@lid', 'pn': None})
+    def test_unresolved_lid_returns_retryable_webhook_error(self, gateway):
+        response = self.signed_post(self.payload(**{'from': '1234@lid'}))
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(Inbound.objects.exists())
+        self.assertFalse(Outbound.objects.exists())

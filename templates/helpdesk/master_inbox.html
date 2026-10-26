@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}GesTi · Conversas WhatsApp{% endblock %}
+{% block content %}
+<header class="page-heading"><div><span class="eyebrow">Acesso exclusivo do master</span><h1>Conversas WhatsApp</h1><p>Mensagens recebidas, respostas do atendimento e situação do envio. Apenas colaboradores cadastrados e ativos.</p></div></header>
+{% include 'helpdesk/tabs.html' %}
+<div class="two-columns">
+  <article class="box">
+    <h2>Colaboradores</h2>
+    <p class="muted">Selecione uma pessoa para abrir o histórico.</p>
+    <div style="max-height:65vh;overflow:auto">
+      {% for contact in contacts %}
+      <p><a href="/support/inbox/{{ contact.pk }}/"><strong>{{ contact.name }}</strong> · {{ contact.company.code }}</a><small> · {{ contact.phone }}</small></p>
+      {% empty %}<p>Nenhum colaborador ativo cadastrado.</p>{% endfor %}
+    </div>
+  </article>
+  <article class="box">
+    {% if selected %}
+      <h2>{{ selected.name }}</h2>
+      <p class="muted">{{ selected.company.code }} · {{ selected.phone }} · {{ selected.email }}</p>
+      <div aria-label="Histórico de mensagens" style="max-height:55vh;overflow:auto">
+        {% for date, direction, entry in history %}
+          <div style="padding:12px;margin:8px 0;border:1px solid var(--border,#ddd);border-radius:10px">
+            <div><strong>{% if direction == 'in' %}Colaborador{% else %}GesTi / atendimento{% endif %}</strong> <small>{{ date|date:'d/m/Y H:i:s' }}</small></div>
+            <p style="white-space:pre-wrap;overflow-wrap:anywhere">{{ entry.text }}</p>
+            {% if direction == 'out' %}<small>Situação: {{ entry.get_status_display }}{% if entry.detail %} · {{ entry.detail }}{% endif %}</small>{% endif %}
+          </div>
+        {% empty %}<p>Nenhuma mensagem registrada desse colaborador.</p>{% endfor %}
+      </div>
+      <form method="post" class="box">
+        {% csrf_token %}
+        <label for="master-reply">Responder pelo WhatsApp</label>
+        <textarea id="master-reply" name="text" maxlength="4000" rows="4" required placeholder="Escreva sua resposta"></textarea>
+        <button type="submit">Enviar resposta</button>
+        <p class="muted">O envio entra na fila do WAHA. Verifique o status acima ou em Mensagens e falhas.</p>
+      </form>
+    {% else %}
+      <h2>Escolha um colaborador</h2>
+      <p>As conversas aparecerão aqui. Números desconhecidos continuam sem atendimento.</p>
+    {% endif %}
+  </article>
+</div>
+{% endblock %}

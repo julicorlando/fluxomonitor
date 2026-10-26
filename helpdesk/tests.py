@@ -251,14 +251,15 @@ class HelpdeskTests(TestCase):
         self.assertEqual(client.post(f'/support/tickets/{ticket.pk}/', {}).status_code, 403)
 
     @patch('helpdesk.transport.session_info', return_value={'status':'WORKING'})
-    @patch('helpdesk.transport.gateway', return_value={'id':'WA-123'})
+    @patch('helpdesk.transport.gateway')
     def test_dispatch_and_ack_is_monotonic(self, gateway, info):
+        gateway.side_effect = lambda method, path, *args: ({'numberExists':True,'chatId':self.contact.phone[1:]+'@c.us','pn':self.contact.phone[1:]+'@c.us'} if method == 'GET' else {'id':'WA-123'})
         self.say('Oi')
         dispatch()
         item = Outbound.objects.get()
         self.assertEqual(item.status, 'accepted')
         dispatch()
-        self.assertEqual(gateway.call_count, 1)
+        self.assertEqual(gateway.call_count, 2)
         for rank in [3,2,1,-1]:
             receive_event({'session':'default','event':'message.ack','payload':{'id':'WA-123','to':self.contact.phone[1:]+'@c.us','ack':rank}})
         item.refresh_from_db()
@@ -367,8 +368,9 @@ class HelpdeskTests(TestCase):
             self.update(self.ticket(), assigned_to=user)
 
     @patch('helpdesk.transport.session_info', return_value={'status':'WORKING'})
-    @patch('helpdesk.transport.gateway', return_value={'id':'WA-EARLY'})
+    @patch('helpdesk.transport.gateway')
     def test_ack_before_send_response_is_reconciled(self, gateway, info):
+        gateway.side_effect = lambda method, path, *args: ({'numberExists':True, 'chatId':self.contact.phone[1:]+'@c.us'} if method == 'GET' else {'id':'WA-EARLY'})
         self.say('Oi')
         receive_event({'session':'default','event':'message.ack','payload':{'id':'WA-EARLY','to':self.contact.phone[1:]+'@c.us','ack':2}})
         dispatch()
@@ -469,8 +471,9 @@ class HelpdeskTests(TestCase):
         self.assertFalse(Outbound.objects.exists())
 
     @patch('helpdesk.transport.session_info', return_value={'status': 'WORKING'})
-    @patch('helpdesk.transport.gateway', return_value={})
+    @patch('helpdesk.transport.gateway')
     def test_gateway_without_message_id_records_specific_diagnostic(self, gateway, info):
+        gateway.side_effect = lambda method, path, *args: ({'numberExists':True, 'chatId':self.contact.phone[1:]+'@c.us'} if method == 'GET' else {})
         self.say('Oi')
         dispatch()
         item = Outbound.objects.get()
@@ -485,3 +488,26 @@ class HelpdeskTests(TestCase):
         item = Outbound.objects.get()
         self.assertEqual(item.status, 'unknown')
         self.assertIn('HTTP 500', item.detail)
+
+    @patch('helpdesk.transport.session_info', return_value={'status': 'WORKING'})
+    @patch('helpdesk.transport.gateway')
+    def test_check_exists_verified_lid_routes_outbound_and_inbound(self, gateway, info):
+        lid = '262453002793117@lid'
+        gateway.side_effect = lambda method, path, *args: (
+            {'numberExists': True, 'chatId': lid, 'pn': self.contact.phone[1:] + '@c.us'}
+            if method == 'GET' and 'check-exists' in path else {'id': 'WA-lid'})
+        self.say('Oi')
+        dispatch()
+        self.assertEqual(Outbound.objects.last().status, 'accepted')
+        self.assertEqual(gateway.call_args.args[2]['chatId'], lid)
+        incoming = self.payload('Novo pedido', **{'from': lid})
+        receive_event(incoming)
+        self.assertEqual(Inbound.objects.filter(external_id=incoming['payload']['id']).count(), 1)
+
+    @patch('helpdesk.transport.session_info', return_value={'status': 'WORKING'})
+    @patch('helpdesk.transport.gateway', return_value={'numberExists': False})
+    def test_unregistered_whatsapp_number_is_not_sent_to(self, gateway, info):
+        self.say('Oi')
+        dispatch()
+        self.assertEqual(Outbound.objects.get().status, 'failed')
+        self.assertEqual(gateway.call_count, 1)

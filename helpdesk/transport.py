@@ -9,13 +9,13 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from urllib.error import HTTPError, URLError
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import transaction, models
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from flow.whatsapp import gateway, session_info
 from .identity import phone_from_chat
-from .models import BotConfig, Contact, DeliveryAck, Inbound, Outbound
+from .models import BotConfig, Contact, DeliveryAck, Inbound, Outbound, VerifiedChatIdentity
 
 
 def hook_key():
@@ -64,6 +64,24 @@ def ensure_webhook():
     BotConfig.objects.filter(pk=1).update(webhook_ready=True, webhook_checked_at=timezone.now(), detail='Recebimento configurado na sessão WhatsApp existente.')
 
 
+def verified_destination(contact):
+    """Resolve Brazilian WhatsApp IDs via the official WAHA number-check API."""
+    from urllib.parse import urlencode
+    number = contact.phone.lstrip('+')
+    result = gateway('GET', '/api/contacts/check-exists?' + urlencode({'phone': number, 'session': 'default'}))
+    if not isinstance(result, dict) or result.get('numberExists') is not True:
+        raise ValidationError('WAHA não confirmou este número como conta WhatsApp.')
+    chat = result.get('chatId')
+    if not isinstance(chat, str) or not re.fullmatch(r'[0-9]+@(lid|c[.]us|s[.]whatsapp[.]net)', chat):
+        raise ValidationError('WAHA retornou identidade de destino inválida.')
+    # Only accept a PN matching the enrolled number; a verified LID is safe as a destination.
+    pn = result.get('pn')
+    if pn and phone_from_chat(pn) != contact.phone:
+        raise ValidationError('WAHA retornou número diferente do cadastro.')
+    VerifiedChatIdentity.objects.update_or_create(contact=contact, defaults={'phone': contact.phone, 'chat_id': chat})
+    return chat
+
+
 def resolve_phone(payload):
     sender = payload.get('from')
     phone = phone_from_chat(sender)
@@ -83,6 +101,10 @@ def resolve_phone(payload):
     mapped = gateway('GET', '/api/default/lids/' + sender)
     phone = phone_from_chat(mapped.get('pn')) if isinstance(mapped, dict) else None
     if not phone:
+        identity = VerifiedChatIdentity.objects.filter(chat_id=sender, contact__active=True,
+            phone=models.F('contact__phone')).select_related('contact').first()
+        if identity:
+            return identity.phone
         # A NOWEB contact-store sync may be pending. Return 503 from the webhook
         # so WAHA retries rather than silently and permanently discarding the event.
         raise ValidationError('LID ainda não resolvido; aguardar sincronização e repetir webhook.')
@@ -201,7 +223,8 @@ def dispatch(limit=5):
         status, detail, external = 'unknown', 'Resultado incerto; sem repetição automática para evitar duplicidade.', ''
         retry = False
         try:
-            result = gateway('POST', '/api/sendText', {'session': 'default', 'chatId': item.phone[1:] + '@c.us', 'text': item.text})
+            chat_id = verified_destination(contact)
+            result = gateway('POST', '/api/sendText', {'session': 'default', 'chatId': chat_id, 'text': item.text})
             external = result.get('id', '') if isinstance(result, dict) else ''
             if isinstance(external, dict):
                 external = external.get('_serialized', '')
@@ -211,6 +234,10 @@ def dispatch(limit=5):
             else:
                 detail = 'Gateway respondeu sem ID de mensagem; conferir API WAHA e registros do serviço support.'
                 logging.error('Suporte WAHA: sendText respondeu sem identificador, tipo=%s, outbound=%s', type(result).__name__, pk)
+        except ValidationError as exc:
+            status = 'failed'
+            detail = 'Número não confirmado no WAHA; envio não executado.'
+            logging.warning('Suporte WAHA: número não confirmado, outbound=%s', pk)
         except HTTPError as exc:
             if exc.code == 429:
                 retry = True

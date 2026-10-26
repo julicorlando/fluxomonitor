@@ -1,5 +1,6 @@
 """Asset life-cycle operations, authenticated documents and audit dashboard."""
 from io import BytesIO
+from datetime import timedelta
 from decimal import Decimal
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -37,9 +38,9 @@ def overview(request):
     total = assets.count()
     unassigned = assets.filter(contact__isnull=True).exclude(state='retired').count()
     warranty_soon = assets.filter(warranty_expires_at__range=(
-        timezone.localdate(),timezone.localdate()+timezone.timedelta(days=60))).count()
+        timezone.localdate(),timezone.localdate()+timedelta(days=60))).count()
     missing_checks = assets.exclude(state='retired').exclude(
-        checks__checked_at__date__gte=timezone.localdate()-timezone.timedelta(days=365)).distinct().count()
+        checks__checked_at__date__gte=timezone.localdate()-timedelta(days=365)).distinct().count()
     cost = Maintenance.objects.filter(asset__in=assets).aggregate(total=Sum('cost'))['total'] or Decimal('0')
     return render(request,'helpdesk/asset_dashboard.html',{
         'totals':totals,'total':total,'unassigned':unassigned,'warranty_soon':warranty_soon,

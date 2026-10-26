@@ -560,6 +560,8 @@ class HelpdeskTests(TestCase):
         def response(method, path, *args):
             if '/lids/' in path:
                 return {'pn': None}
+            if path.startswith('/api/contacts?'):
+                return {'id': lid, 'number': None}
             if 'check-exists' in path:
                 return {'numberExists': True, 'chatId': self.contact.phone[1:] + '@c.us'}
             raise AssertionError(path)

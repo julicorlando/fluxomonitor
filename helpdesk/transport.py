@@ -72,13 +72,21 @@ def resolve_phone(payload):
     if not isinstance(sender, str) or not re.fullmatch(r'[0-9]+@lid', sender):
         return None
     # Only trusted gateway metadata, never a phone written in the user's message.
-    data = payload.get('_data') or {}
-    key = data.get('key') or {} if isinstance(data, dict) else {}
-    phone = phone_from_chat(key.get('remoteJidAlt'))
-    if phone:
-        return phone
+    data = payload.get('_data') if isinstance(payload.get('_data'), dict) else {}
+    key = data.get('key') if isinstance(data.get('key'), dict) else {}
+    # Phone identity may be carried by trusted WAHA metadata when the sender is a LID.
+    for candidate in (key.get('remoteJidAlt'), data.get('remoteJidAlt'),
+                      payload.get('participant'), data.get('participantPn')):
+        phone = phone_from_chat(candidate)
+        if phone:
+            return phone
     mapped = gateway('GET', '/api/default/lids/' + sender)
-    return phone_from_chat(mapped.get('pn')) if isinstance(mapped, dict) else None
+    phone = phone_from_chat(mapped.get('pn')) if isinstance(mapped, dict) else None
+    if not phone:
+        # A NOWEB contact-store sync may be pending. Return 503 from the webhook
+        # so WAHA retries rather than silently and permanently discarding the event.
+        raise ValidationError('LID ainda não resolvido; aguardar sincronização e repetir webhook.')
+    return phone
 
 
 def receive_event(event):

@@ -368,8 +368,9 @@ class HelpdeskTests(TestCase):
             self.update(self.ticket(), assigned_to=user)
 
     @patch('helpdesk.transport.session_info', return_value={'status':'WORKING'})
-    @patch('helpdesk.transport.gateway', return_value={'id':'WA-EARLY'})
+    @patch('helpdesk.transport.gateway')
     def test_ack_before_send_response_is_reconciled(self, gateway, info):
+        gateway.side_effect = lambda method, path, *args: ({'numberExists':True, 'chatId':self.contact.phone[1:]+'@c.us'} if method == 'GET' else {'id':'WA-EARLY'})
         self.say('Oi')
         receive_event({'session':'default','event':'message.ack','payload':{'id':'WA-EARLY','to':self.contact.phone[1:]+'@c.us','ack':2}})
         dispatch()

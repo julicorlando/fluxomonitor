@@ -159,7 +159,14 @@ def process_message(message_id):
     rating = re.fullmatch(r'avaliar\s+([a-z]+-\d+)\s+([1-5])', n)
     surveys = pending_surveys(contact)
     generic_rating = re.fullmatch('[1-5]', n) and surveys.exists()
-    if rating or generic_rating:
+    # Atendimento humano é um modo silencioso persistente, mesmo quando há
+    # avaliação pendente: não iniciar, retomar ou responder pelo chatbot.
+    if session.state == 'human':
+        pass
+    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or session.state in ('idle', 'offer')):
+        session.state, session.draft = 'human', {}
+        audit(contact.name, 'support_human_only', session, {'contact_id': contact.pk})
+    elif rating or generic_rating:
         survey = surveys.filter(ticket__code__iexact=rating[1]).first() if rating else surveys.first()
         if survey and int(message.sent_at.timestamp()) < int(survey.created_at.timestamp()):
             output = 'Recebi uma mensagem anterior ao encerramento. Para avaliar agora:\n' + survey_prompt(survey)
@@ -198,15 +205,6 @@ def process_message(message_id):
         else:
             session.state = 'offer'
             output = menu(contact)
-    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or session.state in ('idle', 'offer')):
-        # Human-only handoff: no automatic ticket, update, or bot reply.
-        # Inbound messages remain stored and visible in the master's inbox.
-        session.state, session.draft = 'human', {}
-        audit(contact.name, 'support_human_only', session, {'contact_id': contact.pk})
-    elif session.state == 'human':
-        # The human operator can read incoming messages in the inbox.
-        # Never create or annotate tickets; do not send chatbot responses.
-        pass
     elif session.state == 'idle':
         session.state, session.draft = 'offer', {}
         output = menu(contact)

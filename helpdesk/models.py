@@ -76,6 +76,13 @@ class Ticket(models.Model):
     response_due_at = models.DateTimeField(null=True, blank=True, db_index=True)
     resolution_due_at = models.DateTimeField(null=True, blank=True, db_index=True)
     first_responded_at = models.DateTimeField(null=True, blank=True)
+    sla_calendar = models.JSONField(default=dict, blank=True)
+    sla_pauses = models.JSONField(default=list, blank=True)
+    sla_paused_at = models.DateTimeField(null=True, blank=True)
+    sla_cycle = models.PositiveIntegerField(default=1)
+    asset = models.ForeignKey('Asset', null=True, blank=True, on_delete=models.PROTECT, related_name='tickets')
+    problem = models.ForeignKey('Problem', null=True, blank=True, on_delete=models.PROTECT, related_name='tickets')
+    reopen_count = models.PositiveIntegerField(default=0)
 
     STATUS = [('open', 'Aberto'), ('working', 'Em atendimento'), ('waiting', 'Aguardando solicitante'),
               ('resolved', 'Resolvido'), ('closed', 'Concluído'), ('cancelled', 'Cancelado')]
@@ -217,3 +224,119 @@ class SenderIdentity(models.Model):
     source = models.CharField(max_length=12, choices=[('master', 'Confirmado pelo master'), ('gateway', 'Confirmado pelo WAHA'), ('legacy', 'Vínculo anterior validado')])
     confirmed_by = models.CharField(max_length=150, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+def default_schedule():
+    return {str(day): [['08:00','18:00']] for day in range(5)}
+
+
+class CompanySlaConfig(models.Model):
+    company = models.OneToOneField(Company, on_delete=models.CASCADE, related_name='sla_config')
+    mode = models.CharField(max_length=12, choices=[('business','Expediente'),('continuous','24×7')], default='business')
+    schedule = models.JSONField(default=default_schedule)
+    holidays = models.JSONField(default=list, blank=True)
+    pause_waiting = models.BooleanField(default=True)
+    alerts_enabled = models.BooleanField(default=True)
+    warning_minutes = models.PositiveIntegerField(default=30, validators=[MinValueValidator(1),MaxValueValidator(1440)])
+    escalation_minutes = models.PositiveIntegerField(default=60, validators=[MinValueValidator(0),MaxValueValidator(10080)])
+    manager = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    weekly_enabled = models.BooleanField(default=False)
+    weekly_day = models.PositiveSmallIntegerField(default=0, choices=[(0,'Segunda'),(1,'Terça'),(2,'Quarta'),(3,'Quinta'),(4,'Sexta'),(5,'Sábado'),(6,'Domingo')])
+    weekly_time = models.TimeField(default='08:00')
+
+
+class SlaAgentProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    contact = models.ForeignKey(Contact, on_delete=models.PROTECT)
+
+
+class Asset(models.Model):
+    KINDS = [('computer','Computador'),('printer','Impressora'),('server','Servidor'),('network','Rede'),('other','Outro')]
+    STATES = [('active','Em uso'),('stock','Em estoque'),('maintenance','Em manutenção'),('retired','Desativado')]
+    company = models.ForeignKey(Company, on_delete=models.PROTECT)
+    tag = models.CharField(max_length=60)
+    name = models.CharField(max_length=150)
+    kind = models.CharField(max_length=12, choices=KINDS, default='computer')
+    state = models.CharField(max_length=12, choices=STATES, default='active')
+    contact = models.ForeignKey(Contact, null=True, blank=True, on_delete=models.PROTECT)
+    serial = models.CharField(max_length=120, blank=True)
+    location = models.CharField(max_length=200, blank=True)
+    notes = models.TextField(max_length=4000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        ordering = ['company__code','tag']
+        constraints = [models.UniqueConstraint(fields=['company','tag'], name='support_asset_tag')]
+    def __str__(self):
+        return f'{self.company.code} · {self.tag} · {self.name}'
+
+
+class Maintenance(models.Model):
+    asset = models.ForeignKey(Asset, related_name='maintenance', on_delete=models.PROTECT)
+    date = models.DateField()
+    description = models.TextField(max_length=4000)
+    cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    next_date = models.DateField(null=True, blank=True)
+    author = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        ordering = ['-date','-id']
+
+
+class KnowledgeArticle(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.PROTECT)
+    title = models.CharField(max_length=180)
+    keywords = models.CharField(max_length=400, help_text='Separe por vírgula. Ex.: impressora, impressão, não imprime')
+    category = models.CharField(max_length=16, choices=Ticket.CATEGORIES, default='general')
+    procedure = models.TextField(max_length=4000)
+    published = models.BooleanField(default=False)
+    bot_enabled = models.BooleanField(default=False)
+    author = models.CharField(max_length=150)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        ordering = ['title','id']
+
+
+class KnowledgeSuggestion(models.Model):
+    article = models.ForeignKey(KnowledgeArticle, on_delete=models.PROTECT)
+    contact = models.ForeignKey(Contact, on_delete=models.PROTECT)
+    helpful = models.BooleanField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Problem(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.PROTECT)
+    title = models.CharField(max_length=180)
+    category = models.CharField(max_length=16, choices=Ticket.CATEGORIES, default='general')
+    status = models.CharField(max_length=16, choices=[('investigating','Em investigação'),('known','Causa identificada'),('resolved','Resolvido')], default='investigating')
+    root_cause = models.TextField(max_length=4000, blank=True)
+    workaround = models.TextField(max_length=4000, blank=True)
+    author = models.CharField(max_length=150)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        ordering = ['-updated_at','-id']
+
+
+class SlaAlert(models.Model):
+    STATUS = [('pending','Na fila'),('sending','Enviando'),('accepted','Aceito pelo gateway'),('blocked','Configuração pendente'),('failed','Recusado'),('unknown','Resultado incerto'),('cancelled','Cancelado')]
+    ticket = models.ForeignKey(Ticket, related_name='sla_alerts', null=True, blank=True, on_delete=models.PROTECT)
+    company = models.ForeignKey(Company, on_delete=models.PROTECT)
+    cycle = models.PositiveIntegerField(default=1)
+    phase = models.CharField(max_length=12, choices=[('response','Primeira resposta'),('resolution','Resolução'),('weekly','Resumo semanal')])
+    kind = models.CharField(max_length=12, choices=[('warning','Prazo próximo'),('overdue','Prazo vencido'),('escalation','Escalonamento'),('weekly','Resumo semanal')])
+    key = models.CharField(max_length=150, unique=True)
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    contact = models.ForeignKey(Contact, null=True, blank=True, on_delete=models.PROTECT)
+    phone = models.CharField(max_length=14, blank=True)
+    text = models.TextField(blank=True)
+    status = models.CharField(max_length=12, choices=STATUS, default='pending')
+    detail = models.CharField(max_length=250, blank=True)
+    gateway_id = models.CharField(max_length=250, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    attempted_at = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    class Meta:
+        indexes = [models.Index(fields=['status','id'], name='support_sla_alert_queue')]

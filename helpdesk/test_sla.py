@@ -5,7 +5,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase, Client, override_settings
 from django.utils import timezone
 from .forms import SlaPolicyForm
-from .models import AgentGrant, Company, Contact, Conversation, Inbound, Outbound, Satisfaction, SlaPolicy, Ticket
+from .models import CompanySlaConfig, AgentGrant, Company, Contact, Conversation, Inbound, Outbound, Satisfaction, SlaPolicy, Ticket
 from .reporting import dashboard
 from .services import create_ticket, update_ticket
 from .sla import start_sla, ticket_sla
@@ -21,6 +21,8 @@ class SlaDashboardTests(TestCase):
         self.agent = get_user_model().objects.create_user('agente', is_staff=True)
         AgentGrant.objects.create(user=self.agent, company=self.company)
         self.client.force_login(self.root)
+        CompanySlaConfig.objects.filter(company=self.company).update(mode='continuous',pause_waiting=False)
+        CompanySlaConfig.objects.filter(company=self.other_company).update(mode='continuous',pause_waiting=False)
         self.now = timezone.now()
 
     def ticket(self, *, company=None, tracked=True, status='open', priority='normal'):

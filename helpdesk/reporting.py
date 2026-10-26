@@ -10,17 +10,31 @@ from .sla import duration, ticket_sla
 ACTIVE = ('open', 'working', 'waiting')
 
 
-def dashboard(tickets):
-    now = timezone.now()
+def dashboard(tickets, now=None):
+    now = now or timezone.now()
     active = tickets.filter(status__in=ACTIVE)
     tracked = tickets.filter(sla_started_at__isnull=False).exclude(status='cancelled')
-    response_eligible = tracked.filter(Q(first_responded_at__isnull=False) | Q(response_due_at__lt=now))
-    resolution_eligible = tracked.filter(Q(resolved_at__isnull=False) | Q(resolution_due_at__lt=now))
-    response_met = response_eligible.filter(first_responded_at__lte=F('response_due_at')).count()
-    resolution_met = resolution_eligible.filter(resolved_at__lte=F('resolution_due_at')).count()
-    response_n, resolution_n = response_eligible.count(), resolution_eligible.count()
-    times = tracked.aggregate(response=Avg(F('first_responded_at')-F('sla_started_at')),
-                              resolution=Avg(F('resolved_at')-F('sla_started_at')))
+    response_met = resolution_met = response_n = resolution_n = 0
+    response_total = resolution_total = 0
+    response_done_n = resolution_done_n = 0
+    for t in tracked.iterator(chunk_size=200):
+        clocks = ticket_sla(t,now)
+        for phase_name in ('response','resolution'):
+            clock = clocks[phase_name]
+            measured = bool(clock.get('done') or clock['state'] == 'breached')
+            met = bool(clock.get('done') and clock['state'] != 'breached')
+            if phase_name == 'response':
+                response_n += measured
+                response_met += met
+                if clock.get('done'):
+                    response_total += clock['used']
+                    response_done_n += 1
+            else:
+                resolution_n += measured
+                resolution_met += met
+                if clock.get('done'):
+                    resolution_total += clock['used']
+                    resolution_done_n += 1
     surveys = Satisfaction.objects.filter(ticket__in=tickets, cancelled=False)
     answered = surveys.filter(answered_at__isnull=False, rating__isnull=False)
     ratings = answered.aggregate(total=Count('id'), average=Avg('rating'), happy=Count('id', filter=Q(rating__gte=4)))
@@ -31,7 +45,7 @@ def dashboard(tickets):
     for ticket in active.select_related('company', 'assigned_to').iterator(chunk_size=200):
         ticket.sla = ticket_sla(ticket, now)
         active_states[ticket.sla['state']] += 1
-        rank = {'breached': 0, 'risk': 1, 'legacy': 3, 'ok': 2}[ticket.sla['state']]
+        rank = {'breached': 0, 'risk': 1, 'legacy': 3, 'ok': 2, 'paused': 4}[ticket.sla['state']]
         attention.append((rank, priority_rank[ticket.priority], ticket.created_at, ticket))
         attention.sort(key=lambda row: row[:3])
         del attention[8:]
@@ -55,13 +69,13 @@ def dashboard(tickets):
         'total': tickets.count(), 'active': active.count(), 'unassigned': active.filter(assigned_to__isnull=True).count(),
         'resolved': tickets.filter(status__in=('resolved','closed')).count(),
         'waiting': active.filter(status='waiting').count(), 'critical': active.filter(priority='critical').count(),
-        'overdue': active_states['breached'], 'risk': active_states['risk'], 'legacy': active_states['legacy'],
+        'overdue': active_states['breached'], 'risk': active_states['risk'], 'paused':active_states['paused'], 'legacy': active_states['legacy'],
         'response_met': response_met, 'response_n': response_n,
         'resolution_met': resolution_met, 'resolution_n': resolution_n,
         'response_pct': round(response_met/response_n*100,1) if response_n else None,
         'resolution_pct': round(resolution_met/resolution_n*100,1) if resolution_n else None,
-        'response_avg': duration(times['response'].total_seconds()) if times['response'] is not None else '—',
-        'resolution_avg': duration(times['resolution'].total_seconds()) if times['resolution'] is not None else '—',
+        'response_avg': duration(response_total/response_done_n*60) if response_done_n else '—',
+        'resolution_avg': duration(resolution_total/resolution_done_n*60) if resolution_done_n else '—',
         'rating_avg': round(ratings['average'],1) if total_ratings else None,
         'rating_count': total_ratings,
         'csat': round(ratings['happy']/total_ratings*100,1) if total_ratings else None,

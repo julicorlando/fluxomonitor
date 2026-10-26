@@ -37,6 +37,7 @@ def version(user, ticket_id=None):
     data = list(tickets.order_by('-updated_at').values_list('pk', 'revision', 'updated_at')[:200])
     data += list(Outbound.objects.filter(company_id__in=company_ids(user), ticket__in=tickets).values('status').annotate(n=Count('id')).order_by('status'))
     data += list(Satisfaction.objects.filter(ticket__in=tickets).values_list('id', 'rating', 'answered_at', 'cancelled', 'feedback'))
+    data += list(Ticket.objects.filter(pk__in=tickets).values_list('id','sla_paused_at','sla_cycle'))
     data += list(SlaPolicy.objects.values_list('priority', 'response_minutes', 'resolution_minutes'))
     data += [timezone.now().strftime('%Y%m%d%H%M')]
     return hashlib.sha256(str(data).encode()).hexdigest()
@@ -73,7 +74,7 @@ def home(request):
             tickets = tickets.filter(created_at__date__lte=period.cleaned_data['end'])
     else:
         tickets = tickets.none()
-    if request.GET.get('sla') in ('breached', 'risk', 'legacy'):
+    if request.GET.get('sla') in ('breached', 'risk', 'legacy', 'paused'):
         sla_state = request.GET['sla']
         matching = [t.pk for t in tickets.filter(status__in=OPEN).iterator(chunk_size=200) if ticket_sla(t)['state'] == sla_state]
         tickets = tickets.filter(pk__in=matching)
@@ -126,7 +127,8 @@ def detail(request, ticket_id):
             update_ticket(ticket.pk, request.user, status=data['status'], text=data['text'], internal=data['internal'],
                           expected_revision=data['revision'], assigned_to=data['assigned_to'],
                           priority=data.get('priority') or None, category=data.get('category') or None,
-                          start_sla=data.get('start_sla', False))
+                          start_sla=data.get('start_sla', False), asset=data.get('asset'), problem=data.get('problem'),
+                          classify_links=('asset' in request.POST or 'problem' in request.POST))
             messages.success(request, 'Atualização registrada.' if data['internal'] else 'Atualização registrada e mensagem colocada na fila do WhatsApp.')
             return redirect(f'/support/tickets/{ticket.pk}/')
         except ValidationError as exc:
@@ -231,10 +233,12 @@ def tickets_api(request, ticket_id=None):
                 'requester': {'name': ticket.requester_name, 'phone': ticket.requester_phone, 'email': ticket.requester_email},
                 'target': ticket.target, 'description': ticket.description, 'status': ticket.status,
                 'priority': ticket.priority, 'category': ticket.category,
-                'sla': {'state': sla['state'], 'label': sla['label'], 'calendar': '24x7',
+                'asset_id':ticket.asset_id, 'problem_id':ticket.problem_id, 'reopen_count':ticket.reopen_count,
+                'sla': {'state': sla['state'], 'label': sla['label'], 'calendar': 'business' if ticket.sla_calendar.get('mode')=='business' else '24x7',
                         'started_at': stamp(ticket.sla_started_at), 'response_due_at': stamp(ticket.response_due_at),
                         'resolution_due_at': stamp(ticket.resolution_due_at),
-                        'first_responded_at': stamp(ticket.first_responded_at), 'resolved_at': stamp(ticket.resolved_at)},
+                        'first_responded_at': stamp(ticket.first_responded_at), 'resolved_at': stamp(ticket.resolved_at),
+                        'paused_at':stamp(ticket.sla_paused_at)},
                 'revision': ticket.revision, 'assigned_to': ticket.assigned_to_id,
                 'created_at': ticket.created_at.isoformat(), 'updated_at': ticket.updated_at.isoformat()}
     if ticket_id is not None:
@@ -266,6 +270,10 @@ def update_api(request, ticket_id):
         return JsonResponse({'error': 'JSON inválido.'}, status=400)
     if not isinstance(data, dict):
         return JsonResponse({'error': 'Envie um objeto JSON.'}, status=400)
+    classify_links = 'asset' in data or 'problem' in data
+    if classify_links:
+        data.setdefault('asset',ticket.asset_id)
+        data.setdefault('problem',ticket.problem_id)
     form = UpdateForm(data, ticket=ticket)
     if not form.is_valid():
         return JsonResponse({'errors': form.errors.get_json_data()}, status=400)
@@ -274,7 +282,8 @@ def update_api(request, ticket_id):
         ticket = update_ticket(ticket.pk, request.user, status=data['status'], text=data['text'], internal=data['internal'],
                                expected_revision=data['revision'], assigned_to=data['assigned_to'],
                           priority=data.get('priority') or None, category=data.get('category') or None,
-                          start_sla=data.get('start_sla', False))
+                          start_sla=data.get('start_sla', False),asset=data.get('asset'),problem=data.get('problem'),
+                               classify_links=classify_links)
     except ValidationError as exc:
         return JsonResponse({'errors': exc.messages}, status=409)
     return JsonResponse({'id': ticket.pk, 'code': ticket.code, 'status': ticket.status, 'revision': ticket.revision})
@@ -373,7 +382,7 @@ def export_tickets(request, tickets):
         def write(self, value):
             return value
     from django.db.models import OuterRef, Subquery
-    tickets = tickets.annotate(last_rating=Subquery(Satisfaction.objects.filter(ticket_id=OuterRef('pk'),
+    tickets = tickets.select_related('asset','problem').annotate(last_rating=Subquery(Satisfaction.objects.filter(ticket_id=OuterRef('pk'),
         cancelled=False, answered_at__isnull=False).order_by('-answered_at').values('rating')[:1]))
     writer = csv.writer(Echo(), delimiter=';')
     def safe(value):
@@ -382,13 +391,13 @@ def export_tickets(request, tickets):
     def rows():
         yield '\ufeff'
         yield writer.writerow(['Protocolo','Empresa','Colaborador','Equipamento / setor','Categoria','Prioridade',
-            'Status','Responsável','Abertura','Início SLA','Prazo resposta','Primeira resposta','Prazo resolução','Resolução','SLA','Última nota'])
+            'Status','Responsável','Abertura','Início SLA','Prazo resposta','Primeira resposta','Prazo resolução','Resolução','SLA','Última nota','Patrimônio','Problema recorrente','Reaberturas','Calendário SLA'])
         for t in tickets.iterator(chunk_size=200):
             stamp = lambda d: timezone.localtime(d).strftime('%d/%m/%Y %H:%M') if d else ''
             yield writer.writerow([safe(value) for value in [t.code,t.company.code,t.requester_name,t.target,
                 t.get_category_display(),t.get_priority_display(),t.get_status_display(),t.assigned_to,
                 stamp(t.created_at),stamp(t.sla_started_at),stamp(t.response_due_at),stamp(t.first_responded_at),
-                stamp(t.resolution_due_at),stamp(t.resolved_at),ticket_sla(t)['label'],t.last_rating]])
+                stamp(t.resolution_due_at),stamp(t.resolved_at),ticket_sla(t)['label'],t.last_rating,t.asset.tag if t.asset else '',t.problem.title if t.problem else '',t.reopen_count,ticket_sla(t)['calendar_label']]])
     response = StreamingHttpResponse(rows(), content_type='text/csv; charset=utf-8')
     response['Content-Disposition'] = 'attachment; filename="gesti-ti-chamados.csv"'
     response['Cache-Control'] = 'no-store'
@@ -419,4 +428,4 @@ def sla_settings(request):
                                'resolution_minutes':policy.resolution_minutes})
             messages.success(request, 'Prazos salvos. Chamados já iniciados preservam seus prazos; novos chamados usam as novas metas.')
             return redirect('/support/sla/')
-    return render(request, 'helpdesk/sla_settings.html', {'formset': forms})
+    return render(request, 'helpdesk/sla_settings.html', {'formset': forms, 'user_sla_companies':Company.objects.all()})

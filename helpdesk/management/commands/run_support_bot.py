@@ -9,6 +9,7 @@ from helpdesk.services import process_message
 from helpdesk.bindings import recover_bound_pending
 from helpdesk.transport import dispatch, ensure_webhook
 from flow.notifications import runtime_failure, resolve
+from helpdesk.alerts import sla_pass
 
 
 def inbox_pass():
@@ -46,20 +47,23 @@ class Command(BaseCommand):
         logging.basicConfig(level=logging.INFO)
         logging.info('Suporte de TI iniciado: fila persistente e sessão WhatsApp default.')
         if options['once']:
-            for name, operation in [('support_hook', ensure_webhook), ('support_inbox', inbox_pass), ('support_send', dispatch)]:
+            for name, operation in [('support_hook', ensure_webhook), ('support_inbox', inbox_pass), ('support_send', dispatch), ('support_sla', sla_pass)]:
                 safe_pass(name, operation)
             BotConfig.objects.filter(pk=1).update(worker_at=timezone.now())
             return
         # Slow network requests never block receipt processing.
-        with ThreadPoolExecutor(max_workers=3, thread_name_prefix='support') as pool:
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='support') as pool:
             jobs = {}
-            last_hook = 0
+            last_hook = last_sla = 0
             while True:
                 close_old_connections()
                 BotConfig.objects.filter(pk=1).update(worker_at=timezone.now())
                 for name, operation in [('support_inbox', inbox_pass), ('support_send', dispatch)]:
                     if name not in jobs or jobs[name].done():
                         jobs[name] = pool.submit(safe_pass, name, operation)
+                if time.monotonic() - last_sla >= 30 and ('support_sla' not in jobs or jobs['support_sla'].done()):
+                    jobs['support_sla'] = pool.submit(safe_pass, 'support_sla', sla_pass)
+                    last_sla = time.monotonic()
                 if time.monotonic() - last_hook >= 60 and ('support_hook' not in jobs or jobs['support_hook'].done()):
                     jobs['support_hook'] = pool.submit(safe_pass, 'support_hook', ensure_webhook)
                     last_hook = time.monotonic()

@@ -7,8 +7,8 @@ from django.db import transaction
 from django.utils import timezone
 from flow.models import AuditLog
 from .models import (AgentGrant, BotConfig, Company, Contact, Conversation, Inbound,
-                     Outbound, Satisfaction, Ticket, TicketUpdate)
-from .sla import start_sla as initialize_sla, reprioritize
+                     Outbound, Satisfaction, Ticket, TicketUpdate, Asset, Problem, KnowledgeArticle, KnowledgeSuggestion)
+from .sla import start_sla as initialize_sla, reprioritize, waiting_transition
 
 STATUS = dict(Ticket.STATUS)
 OPEN = ('open', 'working', 'waiting')
@@ -61,7 +61,7 @@ def create_ticket(session, message):
         contact=contact, requester_name=contact.name, requester_phone=message.phone,
         requester_email=contact.email, target=session.draft['target'], description=session.draft['description'])
     initialize_sla(ticket, ticket.created_at)
-    ticket.save(update_fields=['sla_started_at', 'response_due_at', 'resolution_due_at'])
+    ticket.save(update_fields=['sla_started_at', 'response_due_at', 'resolution_due_at', 'sla_calendar'])
     TicketUpdate.objects.create(ticket=ticket, author=contact.name, text='Chamado aberto pelo WhatsApp.')
     audit(contact.name, 'support_open', ticket, {'code': ticket.code})
     return ticket
@@ -79,6 +79,35 @@ def survey_prompt(survey):
             '1 — Muito insatisfeito\n2 — Insatisfeito\n3 — Regular\n4 — Satisfeito\n5 — Muito satisfeito\n\n'
             'A avaliação é obrigatória para abrir um novo chamado.\n'
             f'Você também pode enviar: AVALIAR {survey.ticket.code} 5')
+
+
+def knowledge_match(contact, description):
+    text = ' '+re.sub(r'[^a-z0-9]+',' ',normalized(description)).strip()+' '
+    matches = []
+    for article in KnowledgeArticle.objects.filter(company=contact.company,published=True,bot_enabled=True):
+        score = sum(1 for keyword in article.keywords.split(',') if len(normalized(keyword).strip()) >= 3 and
+                    ' '+re.sub(r'[^a-z0-9]+',' ',normalized(keyword)).strip()+' ' in text)
+        if score:
+            matches.append((score,article.pk,article))
+    return max(matches,key=lambda row:(row[0],-row[1]))[2] if matches else None
+
+
+def confirm_draft(session, contact):
+    return (f'Confira os dados:\nEmpresa: {contact.company.code}\nColaborador: {contact.name}\n'
+            f'Setor/equipamento: {session.draft["target"]}\nProblema: {session.draft["description"]}\n\n'
+            '1 — Confirmar abertura\n2 — Corrigir\n3 — Cancelar')
+
+
+def requester_note(ticket, contact, text, now):
+    previous = ticket.status
+    if previous == 'waiting':
+        ticket.status = 'working'
+        waiting_transition(ticket,previous,now)
+    ticket.revision += 1
+    ticket.updated_at = now
+    ticket.save()
+    TicketUpdate.objects.create(ticket=ticket,author=contact.name,text=text,old_status=previous,new_status=ticket.status)
+    audit(contact.name,'support_note_resume',ticket,{'from':previous,'to':ticket.status,'sla_resumed':previous=='waiting'})
 
 
 def menu(contact):
@@ -182,8 +211,7 @@ def process_message(message_id):
     elif session.state == 'human':
         ticket = Ticket.objects.filter(pk=session.draft.get('ticket'), contact=contact, company=contact.company).first()
         if ticket and ticket.status in OPEN:
-            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text=text or '[Mensagem sem texto; solicite a descrição por escrito.]')
-            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
+            requester_note(ticket,contact,text or '[Mensagem sem texto; solicite a descrição por escrito.]',now)
             # Silent handoff: do not interrupt a human conversation with repeated bot replies.
         else:
             session.state, session.draft = 'offer', {}
@@ -217,9 +245,32 @@ def process_message(message_id):
         else:
             session.draft['description'] = text
             session.state = 'confirm'
-            output = (f'Confira os dados:\nEmpresa: {contact.company.code}\nColaborador: {contact.name}\n'
-                      f'Setor/equipamento: {session.draft["target"]}\nProblema: {text}\n\n'
-                      '1 — Confirmar abertura\n2 — Corrigir\n3 — Cancelar')
+            article = knowledge_match(contact,text)
+            if article:
+                suggestion = KnowledgeSuggestion.objects.create(article=article,contact=contact)
+                session.state = 'knowledge'
+                session.draft['suggestion'] = suggestion.pk
+                output = (f'Antes de abrir, este procedimento pode ajudar:\n*{article.title}*\n\n{article.procedure}'
+                          '\n\n1 — Resolveu meu problema\n2 — Continuar e abrir chamado\nVocê pode escolher 2 sem executar o procedimento.')
+            else:
+                output = confirm_draft(session,contact)
+    elif session.state == 'knowledge':
+        suggestion = KnowledgeSuggestion.objects.filter(pk=session.draft.get('suggestion'),contact=contact,
+                                                        article__company=contact.company).first()
+        if n in ('1','resolveu','resolvido'):
+            if suggestion:
+                suggestion.helpful = True
+                suggestion.save(update_fields=['helpful'])
+            session.state,session.draft = 'idle',{}
+            output = 'Ótimo! Registrei que o procedimento resolveu. Quando precisar, é só chamar.'
+        elif n in ('2','continuar','abrir chamado','nao'):
+            if suggestion:
+                suggestion.helpful = False
+                suggestion.save(update_fields=['helpful'])
+            session.state = 'confirm'
+            output = confirm_draft(session,contact)
+        else:
+            output = 'Responda 1 se resolveu ou 2 para continuar com a abertura do chamado.'
     elif session.state == 'confirm':
         if n in ('1', 'sim', 'confirmar'):
             ticket = create_ticket(session, message)
@@ -251,8 +302,7 @@ def process_message(message_id):
         ticket = Ticket.objects.filter(pk=session.draft.get('ticket'), contact=contact, company=contact.company,
                                        requester_phone=contact.phone, status__in=OPEN).first()
         if ticket and text:
-            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text=text)
-            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
+            requester_note(ticket,contact,text,now)
             output = f'Informação acrescentada ao chamado {ticket.code}.'
             session.state, session.draft = 'idle', {}
         else:
@@ -269,7 +319,7 @@ def process_message(message_id):
 
 
 @transaction.atomic
-def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision, assigned_to=None, priority=None, category=None, start_sla=False):
+def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision, assigned_to=None, priority=None, category=None, start_sla=False, asset=None, problem=None, classify_links=False):
     snapshot = Ticket.objects.get(pk=ticket_id)
     Contact.objects.select_for_update().get(pk=snapshot.contact_id)
     ticket = Ticket.objects.select_for_update().select_related('contact', 'company').get(pk=ticket_id)
@@ -290,6 +340,12 @@ def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision
         raise ValidationError('Prioridade inválida.')
     if category is not None and category not in dict(Ticket.CATEGORIES):
         raise ValidationError('Categoria inválida.')
+    if classify_links:
+        if asset and asset.company_id != ticket.company_id:
+            raise ValidationError('O equipamento deve pertencer à empresa do chamado.')
+        if problem and problem.company_id != ticket.company_id:
+            raise ValidationError('A recorrência deve pertencer à empresa do chamado.')
+        ticket.asset, ticket.problem = asset, problem
     previous_sla = {name: getattr(ticket, name).isoformat() if getattr(ticket, name) else None
                     for name in ('sla_started_at', 'response_due_at', 'resolution_due_at', 'first_responded_at', 'resolved_at')}
     previous_priority, previous_category = ticket.priority, ticket.category
@@ -305,11 +361,15 @@ def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision
     if reopened or (start_sla and not ticket.sla_started_at):
         if status not in OPEN:
             raise ValidationError('Inicie o SLA apenas em um chamado em aberto.')
+        if reopened:
+            ticket.sla_cycle += 1
+            ticket.reopen_count += 1
         initialize_sla(ticket, now)
     elif ticket.sla_started_at and ticket.priority != previous_priority:
         reprioritize(ticket)
     if not internal and ticket.sla_started_at and not ticket.first_responded_at:
         ticket.first_responded_at = now
+    waiting_transition(ticket, previous, now)
     changed_resolution = status in ('resolved', 'closed') and previous not in ('resolved', 'closed')
     if changed_resolution:
         ticket.resolved_at = now
@@ -336,5 +396,7 @@ def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision
           'resolution_due_at': ticket.resolution_due_at.isoformat() if ticket.resolution_due_at else None,
           'sla_reopened': reopened, 'sla_before': previous_sla,
           'first_responded_at': ticket.first_responded_at.isoformat() if ticket.first_responded_at else None,
-          'resolved_at': ticket.resolved_at.isoformat() if ticket.resolved_at else None})
+          'resolved_at': ticket.resolved_at.isoformat() if ticket.resolved_at else None,
+          'sla_calendar': ticket.sla_calendar, 'sla_paused_at': ticket.sla_paused_at.isoformat() if ticket.sla_paused_at else None,
+          'asset_id':ticket.asset_id, 'problem_id':ticket.problem_id})
     return ticket

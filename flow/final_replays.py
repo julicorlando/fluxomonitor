@@ -10,7 +10,7 @@ from .models import WhatsAppConfig,WhatsAppDelivery,WhatsAppFinalReplay,WhatsApp
 from .notifications import safe_notice,resolve
 from .whatsapp import recipients,session_info,gateway
 
-SALT='gesti.final-replay.v1'
+SALT='gesti.final-replay.v2'
 FINAL=re.compile(r'fluxo final\s+(\d+)\s*$',re.IGNORECASE)
 
 def recent_finals():
@@ -41,40 +41,53 @@ def recent_finals():
 def replay_text(rows):
     from datetime import date
     lines=[f"{date.fromisoformat(row['day']):%d/%m/%Y} · Fluxo: {row['adjusted']}" for row in rows]
-    return '*MENSAGEM AUTOMATICA*\n\nFluxos finais · desconto de 10% já aplicado\n\n'+'\n'.join(lines)
+    return '*MENSAGEM AUTOMATICA*\n\nFluxos finais\n\n'+'\n'.join(lines)
 
-def preview(actor):
+def preview(actor,labels=None):
     rows=recent_finals()
     cfg=WhatsAppConfig.objects.filter(pk=1).first()
     chats=recipients(cfg) if cfg else []
     payload={'request_id':str(uuid.uuid4()),'actor':actor,'rows':rows,'recipients':chats}
     return {'rows':rows,'text':replay_text(rows) if rows else '',
-            'token':signing.dumps(payload,salt=SALT,compress=True) if rows and chats else '',
+            'token':signing.dumps(payload,salt=SALT,compress=True) if rows else '',
+            'destinations':[{'value':c,'label':(labels or {}).get(c,c.removesuffix('@c.us'))} for c in chats],
             'recipient_count':len(chats)}
 
-def enqueue(token,actor):
+def selected_destination(payload,destination,number):
+    if destination=='custom':
+        phone=re.sub(r'[ +()\-]','',number or '')
+        if not re.fullmatch(r'[1-9][0-9]{7,14}',phone):
+            raise ValueError('Informe um número válido com país e DDD. Ex.: 5581999999999.')
+        return phone+'@c.us',True
+    if destination and destination in payload['recipients']:return destination,False
+    raise ValueError('Escolha um contato ou grupo salvo, ou selecione Outro número e informe o destino.')
+
+def enqueue(token,actor,destination='',number=''):
     try:
         payload=signing.loads(token,salt=SALT,max_age=900)
         request_id=uuid.UUID(payload['request_id'])
         if payload['actor']!=actor:raise ValueError()
     except (signing.BadSignature,ValueError,TypeError,KeyError) as error:
         raise ValueError('Prévia vencida ou inválida. Atualize a página antes de reenviar.') from error
+    chat,manual=selected_destination(payload,destination,number)
     with transaction.atomic():
         cfg=WhatsAppConfig.objects.select_for_update().get(pk=1)
         existing=WhatsAppFinalReplay.objects.filter(request_id=request_id).first()
-        if existing:return existing,False
+        if existing:
+            if list(existing.deliveries.values_list('chat_id',flat=True))!=[chat]:
+                raise ValueError('Esta prévia já foi usada para outro destino. Atualize a página antes de solicitar um novo reenvio.')
+            return existing,False
         chats=recipients(cfg)
-        if not chats:raise ValueError('Salve ao menos um contato ou grupo antes de reenviar.')
         rows=recent_finals()
-        if not rows or rows!=payload['rows'] or chats!=payload['recipients']:
+        if not rows or rows!=payload['rows'] or (not manual and chat not in chats):
             raise ValueError('O histórico ou os destinatários mudaram. Atualize a página e confira a nova prévia.')
         if WhatsAppFinalReplayRecipient.objects.filter(status__in=['pending','sending']).exists():
             raise ValueError('Já há um reenvio na fila. Acompanhe o histórico antes de solicitar outro.')
         if WhatsAppFinalReplay.objects.filter(created_at__gte=timezone.now()-timedelta(seconds=60)).exists():
             raise ValueError('Aguarde um minuto antes de solicitar outro reenvio.')
-        replay=WhatsAppFinalReplay.objects.create(request_id=request_id,requested_by=actor,snapshot=rows,text=replay_text(rows))
-        WhatsAppFinalReplayRecipient.objects.bulk_create([WhatsAppFinalReplayRecipient(replay=replay,chat_id=chat) for chat in chats])
-        AuditLog.objects.create(actor=actor,action='wa_final_replay',object_type='WhatsAppFinalReplay',object_id=str(replay.pk),changes={'days':[r['day'] for r in rows],'percent':'10.00','recipients':len(chats),'status':'queued'})
+        replay=WhatsAppFinalReplay.objects.create(request_id=request_id,requested_by=actor,snapshot=rows,text=replay_text(rows),manual_chat_id=chat if manual else '')
+        WhatsAppFinalReplayRecipient.objects.create(replay=replay,chat_id=chat)
+        AuditLog.objects.create(actor=actor,action='wa_final_replay',object_type='WhatsAppFinalReplay',object_id=str(replay.pk),changes={'days':[r['day'] for r in rows],'percent':'10.00','recipients':1,'destination_kind':'manual' if manual else 'saved','status':'queued'})
         return replay,True
 
 def dispatch_final_replays():
@@ -101,7 +114,8 @@ def dispatch_final_replays():
             cfg=WhatsAppConfig.objects.select_for_update().get(pk=1)
             row=WhatsAppFinalReplayRecipient.objects.select_for_update().get(pk=ident)
             if row.status!='pending':continue
-            if row.chat_id not in recipients(cfg) or timezone.now()-replay.created_at>timedelta(minutes=15):
+            manual_allowed=row.chat_id==replay.manual_chat_id and bool(re.fullmatch(r'[1-9][0-9]{7,14}@c\.us',row.chat_id))
+            if (row.chat_id not in recipients(cfg) and not manual_allowed) or timezone.now()-replay.created_at>timedelta(minutes=15):
                 row.status='blocked';row.detail='Destinatário removido da configuração ou prazo de 15 minutos expirado.';row.completed_at=timezone.now();row.save();continue
             row.status='sending';row.attempted_at=timezone.now();row.save(update_fields=['status','attempted_at'])
         try:

@@ -3,13 +3,15 @@
   <p>Um resumo dos três últimos dias com fluxo final aceito pelo gateway. Usa os totais originais registrados no envio, com 10% descontados uma única vez, mesmo que a margem atual seja diferente.</p>
   {% if final_replay.error %}<p class="notice" role="alert">{{ final_replay.error }}</p>{% endif %}
   {% if final_replay.rows %}
-  <div class="message-bubble" style="margin:16px 0"><strong>MENSAGEM AUTOMATICA</strong><p>Fluxos finais · desconto de 10% já aplicado</p>{% for row in final_replay.rows %}<p>{{ row.date_label }} · Fluxo: <strong>{{ row.adjusted }}</strong></p>{% endfor %}</div>
+  <div class="message-bubble" style="margin:16px 0"><strong>MENSAGEM AUTOMATICA</strong><p>Fluxos finais</p>{% for row in final_replay.rows %}<p>{{ row.date_label }} · Fluxo: <strong>{{ row.adjusted }}</strong></p>{% endfor %}</div>
   {% if final_replay.rows|length < 3 %}<p class="notice">Há apenas {{ final_replay.rows|length }} dia(s) com envio final confirmado no histórico. Serão reenviadas somente essas datas.</p>{% endif %}
-  <form method="post" action="/whatsapp/finals/replay/" data-confirm="Reenviar este resumo para todos os contatos e grupos salvos? Os fluxos já incluem o desconto de 10%.">
+  <form method="post" action="/whatsapp/finals/replay/" data-confirm="Reenviar este resumo somente para o destino escolhido? Confira o número ou grupo antes de confirmar.">
     {% csrf_token %}<input type="hidden" name="preview_token" value="{{ final_replay.token }}">
+    <p><label for="replay-destination">Enviar para</label><select name="destination" id="replay-destination" required><option value="" selected>Selecione o destino</option>{% for dest in final_replay.destinations %}<option value="{{ dest.value }}">{{ dest.label }}</option>{% endfor %}<option value="custom">Outro número</option></select></p>
+    <p><label for="replay-number">Outro número, com país e DDD</label><input type="tel" name="number" id="replay-number" placeholder="5581999999999" maxlength="30" autocomplete="tel"><small>Preencha este campo ao selecionar “Outro número”. Este destino será usado apenas neste reenvio.</small></p>
     <button {% if not final_replay.token %}disabled{% endif %}>Reenviar fluxos finais</button>
   </form>
-  <p><small>{{ final_replay.recipient_count }} destinatário(s) salvo(s). Prévia válida por 15 minutos. O reenvio entra em fila e não altera os agendamentos nem as contagens. Se os dados forem revisados depois, este resumo continuará reproduzindo a memória do envio original.</small></p>
+  <p><small>Será enviada uma mensagem apenas ao número ou grupo escolhido. Prévia válida por 15 minutos. Os destinatários e horários dos envios automáticos permanecem como estão. Se os dados forem revisados depois, este resumo continuará reproduzindo a memória do envio original.</small></p>
   {% else %}<p>Nenhum resumo disponível para reenvio. São necessários envios finais aceitos com memória de cálculo válida.</p>{% endif %}
   <details class="section-disclosure"><summary>Histórico dos reenvios</summary>
     {% for replay in replay_history %}<article><h3>Reenvio #{{ replay.pk }} · {{ replay.created_at }}</h3><p><small>Solicitado por {{ replay.requested_by }}</small></p><p style="white-space:pre-line">{{ replay.text }}</p>

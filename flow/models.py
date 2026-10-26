@@ -138,6 +138,7 @@ class WhatsAppDelivery(models.Model):
         constraints=[models.UniqueConstraint(fields=['day','scheduled_time','chat_id'],name='unique_whatsapp_day_time_recipient')]
 
 class WhatsAppFinalReplay(models.Model):
+    manual_chat_id=models.CharField(max_length=100,blank=True)
     request_id=models.UUIDField(unique=True)
     requested_by=models.CharField(max_length=150)
     created_at=models.DateTimeField(default=timezone.now)

@@ -98,7 +98,7 @@ def settings(request):
         schedule.append({'time':value,'final':slot==final_time(day),'past':slot<local.time().replace(tzinfo=None)})
     future=[item for item in schedule if not item['past']]
     next_send=future[0]['time']+' hoje' if future else daily_times(cfg,day+timedelta(days=1))[0]+' amanhã'
-    try:final_replay=final_replay_preview(request.user.get_username())
+    try:final_replay=final_replay_preview(request.user.get_username(),labels=dict(groups))
     except ValueError as exc:final_replay={'rows':[],'token':'','error':str(exc)}
     from .models import WhatsAppFinalReplay
     replay_history=WhatsAppFinalReplay.objects.prefetch_related('deliveries').order_by('-created_at','-pk')[:10]
@@ -110,8 +110,8 @@ def settings(request):
 @require_POST
 def replay_finals(request):
     try:
-        replay,created=enqueue_final_replay(request.POST.get('preview_token',''),request.user.get_username())
-        messages.success(request,f'Reenvio #{replay.pk} '+('registrado na fila. O monitor processará os destinatários; acompanhe o histórico abaixo.' if created else 'já foi registrado. O clique repetido não criou outro envio.'))
+        replay,created=enqueue_final_replay(request.POST.get('preview_token',''),request.user.get_username(),destination=request.POST.get('destination',''),number=request.POST.get('number',''))
+        messages.success(request,f'Reenvio #{replay.pk} '+('registrado na fila somente para o destino escolhido. Acompanhe o histórico abaixo.' if created else 'já foi registrado. O clique repetido não criou outro envio.'))
     except ValueError as exc:messages.error(request,str(exc))
     except Exception as exc:
         import logging

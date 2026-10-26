@@ -4,6 +4,7 @@ from . import views, suite_views as suite
 urlpatterns = [
     path('', views.home),
     path('assets/',suite.assets),
+    path('assets/import/',suite.import_assets),
     path('assets/attachments/<int:attachment_id>/',suite.asset_attachment),
     path('assets/new/',suite.asset_detail),
     path('assets/<int:asset_id>/',suite.asset_detail),

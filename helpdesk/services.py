@@ -199,23 +199,14 @@ def process_message(message_id):
             session.state = 'offer'
             output = menu(contact)
     elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or session.state in ('idle', 'offer')):
-        ticket = Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).first()
-        if not ticket:
-            session.draft = {'target': 'Atendimento humano', 'description': text[:4000] or 'Solicitação de atendimento humano.'}
-            ticket = create_ticket(session, message)
-        else:
-            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text='Solicitou atendimento humano pelo WhatsApp.')
-            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
-        session.state, session.draft = 'human', {'ticket': ticket.pk}
-        output = f'Solicitação encaminhada à equipe no chamado {ticket.code}. Pode enviar sua mensagem por aqui.'
+        # Human-only handoff: no automatic ticket, update, or bot reply.
+        # Inbound messages remain stored and visible in the master's inbox.
+        session.state, session.draft = 'human', {}
+        audit(contact.name, 'support_human_only', session, {'contact_id': contact.pk})
     elif session.state == 'human':
-        ticket = Ticket.objects.filter(pk=session.draft.get('ticket'), contact=contact, company=contact.company).first()
-        if ticket and ticket.status in OPEN:
-            requester_note(ticket,contact,text or '[Mensagem sem texto; solicite a descrição por escrito.]',now)
-            # Silent handoff: do not interrupt a human conversation with repeated bot replies.
-        else:
-            session.state, session.draft = 'offer', {}
-            output = menu(contact)
+        # The human operator can read incoming messages in the inbox.
+        # Never create or annotate tickets; do not send chatbot responses.
+        pass
     elif session.state == 'idle':
         session.state, session.draft = 'offer', {}
         output = menu(contact)
@@ -312,7 +303,7 @@ def process_message(message_id):
         output = menu(contact)
     if output:
         reply(message, output, ticket)
-    session.expires_at = now + timedelta(hours=24 if session.state == 'human' else 2)
+    session.expires_at = None if session.state == 'human' else now + timedelta(hours=2)
     session.save()
     message.processed_at, message.error = now, ''
     message.save(update_fields=['processed_at', 'error'])

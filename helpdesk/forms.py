@@ -186,6 +186,11 @@ class AssetForm(ScopedForm):
             self.fields['contact'].queryset = self.fields['contact'].queryset.filter(company_id=company_id)
     def clean(self):
         data = super().clean()
+        if self.instance.pk:
+            for field in ('company', 'contact', 'location'):
+                current = getattr(self.instance, field)
+                if data.get(field) != current:
+                    self.add_error(field, 'Use a movimentação auditada para alterar empresa, responsável ou local.')
         if not self.instance.pk:
             for field in ('tag', 'invoice_number', 'acquisition_date'):
                 if not data.get(field):

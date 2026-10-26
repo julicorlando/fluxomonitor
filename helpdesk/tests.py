@@ -306,6 +306,7 @@ class HelpdeskTests(TestCase):
         info.return_value = {'status':'WORKING','config':{'metadata':{'owner':'TI'},'webhooks':[original]}}
         ensure_webhook()
         body = gateway.call_args.args[2]
+        self.assertEqual(body['config']['noweb']['store'], {'enabled': True, 'fullSync': True})
         self.assertEqual(body['config']['metadata'], {'owner':'TI'})
         self.assertIn(original, body['config']['webhooks'])
         self.assertEqual(body['config']['webhooks'][-1]['hmac']['key'], hook_key())
@@ -414,3 +415,25 @@ class HelpdeskTests(TestCase):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.root)
         self.assertEqual(client.post(f'/api/support/tickets/{ticket.pk}/updates/', '{}', content_type='application/json').status_code, 403)
+
+    @patch('helpdesk.transport.gateway')
+    @patch('helpdesk.transport.session_info')
+    def test_existing_hook_still_enables_noweb_store_without_erasing_options(self, info, gateway):
+        info.return_value = {'status': 'WORKING', 'engine': {'engine': 'NOWEB'}, 'config': {'noweb': {'markOnline': False, 'store': {'enabled': False, 'fullSync': False, 'custom': 'keep'}}}}
+        ensure_webhook()
+        config = gateway.call_args.args[2]['config']
+        self.assertEqual(config['noweb']['store'], {'enabled': True, 'fullSync': True, 'custom': 'keep'})
+        self.assertFalse(config['noweb']['markOnline'])
+        gateway.reset_mock()
+        config['noweb']['store']['enabled'] = False
+        info.return_value = {'status': 'WORKING', 'engine': 'NOWEB', 'config': config}
+        ensure_webhook()
+        self.assertEqual(gateway.call_count, 1)
+        self.assertTrue(gateway.call_args.args[2]['config']['noweb']['store']['enabled'])
+
+    @patch('helpdesk.transport.gateway')
+    @patch('helpdesk.transport.session_info')
+    def test_other_engines_do_not_receive_noweb_store_changes(self, info, gateway):
+        info.return_value = {'status': 'WORKING', 'engine': 'WEBJS', 'config': {}}
+        ensure_webhook()
+        self.assertNotIn('noweb', gateway.call_args.args[2]['config'])

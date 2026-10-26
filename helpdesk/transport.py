@@ -37,13 +37,26 @@ def ensure_webhook():
         raise ValidationError('Aguardando a conexão da sessão WhatsApp existente.')
     config = dict(session.get('config') or {})
     hooks = config.get('webhooks') or []
+    # NOWEB requires its contact store to resolve WhatsApp LIDs to phone numbers.
+    # Preserve engine options and existing data; never logout/delete the session.
+    engine = session.get('engine') or os.getenv('WHATSAPP_DEFAULT_ENGINE', 'NOWEB')
+    if isinstance(engine, dict):
+        engine = engine.get('engine', 'NOWEB')
+    store_ready = True
+    if str(engine).upper() == 'NOWEB':
+        noweb = dict(config.get('noweb') or {})
+        store = dict(noweb.get('store') or {})
+        store_ready = store.get('enabled') is True and store.get('fullSync') is True
+        store.update({'enabled': True, 'fullSync': True})
+        noweb['store'] = store
+        config['noweb'] = noweb
     own = {'url': url, 'customHeaders': [{'name': 'Host', 'value': 'localhost'}], 'events': ['message', 'message.ack'], 'hmac': {'key': hook_key()},
            'retries': {'policy': 'exponential', 'delaySeconds': 2, 'attempts': 10}}
     existing = next((h for h in hooks if h.get('url') == url), None)
     matches = bool(existing and set(existing.get('events') or []) >= set(own['events'])
                    and existing.get('hmac', {}).get('key') == hook_key()
                    and all(header in (existing.get('customHeaders') or []) for header in own['customHeaders']))
-    if not matches:
+    if not matches or not store_ready:
         config['webhooks'] = [h for h in hooks if h.get('url') != url] + [own]
         # Preserve all other session config and webhooks. PUT can briefly restart the session.
         gateway('PUT', '/api/sessions/default', {'name': 'default', 'config': config})

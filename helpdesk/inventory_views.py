@@ -163,35 +163,55 @@ def _line(canvas, label, value, y):
 @staff
 @never_cache
 def responsibility_term(request, pk):
-    asset=scoped(request,pk)
-    buffer=BytesIO()
-    pdf=Canvas(buffer,pagesize=A4)
+    """Termo uses the exact five-column table structure from termo.xlsx (Planilha1)."""
+    asset = scoped(request, pk)
+    buffer = BytesIO()
+    pdf = Canvas(buffer, pagesize=A4)
     pdf.setTitle('GesTi - Termo de responsabilidade patrimonial')
-    pdf.setFont('Helvetica-Bold',16)
-    pdf.drawString(52,790,'TERMO DE RESPONSABILIDADE PATRIMONIAL')
-    pdf.setFont('Helvetica',10)
-    y=751
-    for label,value in [
-        ('Empresa',asset.company.name),('Código do ativo / Patrimônio',asset.tag),
-        ('NF',asset.invoice_number),('Produto',asset.name),('Data de aquisição',str(asset.acquisition_date or '')),
-        ('CÓD PRPOD',asset.product_code),('Modelo / Série',asset.serial),
-        ('Localização',asset.location),('Colaborador responsável',asset.contact.name if asset.contact else ''),
-        ('Data do termo',timezone.localdate().strftime('%d/%m/%Y'))]:
-        y=_line(pdf,label,value,y)
-    y-=25
-    pdf.setFont('Helvetica',10)
-    for line in [
-        'Declaro ter recebido o equipamento descrito, assumindo o dever de',
-        'conservação, uso profissional e devolução conforme as políticas internas.',
-        'Ocorrências, danos ou extravios deverão ser comunicados à empresa.']:
-        pdf.drawString(52,y,line);y-=18
-    y-=65
-    pdf.line(52,y,270,y)
-    pdf.line(325,y,540,y)
-    pdf.drawString(52,y-17,'Responsável pelo equipamento')
-    pdf.drawString(325,y-17,'Entrega / TI')
+    left, right = 42, 553
+    pdf.setFont('Helvetica-Bold', 14)
+    pdf.drawCentredString(297, 794, 'TERMO DE RESPONSABILIDADE PATRIMONIAL')
+    pdf.setFont('Helvetica', 10)
+    pdf.drawString(left, 762, 'Empresa: ' + asset.company.name[:75])
+    pdf.drawString(left, 744, 'Responsavel: ' + (asset.contact.name[:75] if asset.contact else '________________________________'))
+    pdf.drawString(left, 726, 'Local: ' + (asset.location[:75] if asset.location else '________________________________'))
+    pdf.drawString(left, 708, 'Emissao: ' + timezone.localdate().strftime('%d/%m/%Y'))
+
+    # Copy column names AND their order from the supplied spreadsheet; one
+    # patrimony per term (the original sheet itself is an asset listing).
+    headers = ['Código do ativo', 'NF', 'Produto', 'Data', 'CÓD PRPOD']
+    x = [left, 135, 208, 410, 472, right]
+    y_top, y_bottom = 680, 610
+    pdf.setStrokeColorRGB(.5, .5, .5)
+    pdf.rect(left, y_bottom, right-left, y_top-y_bottom)
+    pdf.line(left, 648, right, 648)
+    for position in x[1:-1]:
+        pdf.line(position, y_bottom, position, y_top)
+    values = [
+        asset.tag,
+        asset.invoice_number,
+        asset.name,
+        asset.acquisition_date.strftime('%d/%m/%Y') if asset.acquisition_date else '',
+        asset.product_code,
+    ]
+    for i, (header, value) in enumerate(zip(headers, values)):
+        pdf.setFont('Helvetica-Bold', 8 if i != 0 else 7)
+        pdf.drawString(x[i] + 4, 657, header)
+        pdf.setFont('Helvetica', 8)
+        for line_no, line in enumerate(simpleSplit(str(value or ''), 'Helvetica', 8, x[i+1]-x[i]-8)[:2]):
+            pdf.drawString(x[i] + 4, 634 - line_no * 10, line)
+    pdf.setFont('Helvetica', 10)
+    pdf.drawString(left, 566, 'Recebi o equipamento relacionado acima e comprometo-me a zelar por')
+    pdf.drawString(left, 549, 'sua guarda, utilizacao adequada e devolucao conforme as normas internas.')
+    pdf.drawString(left, 516, 'Observacoes: ______________________________________________________________')
+    pdf.drawString(left, 499, '__________________________________________________________________________')
+    pdf.line(left, 409, 260, 409)
+    pdf.line(334, 409, right, 409)
+    pdf.drawString(left, 392, 'Assinatura do responsavel')
+    pdf.drawString(334, 392, 'Responsavel pela entrega / TI')
+    pdf.drawString(left, 365, 'Data da entrega: ____/____/________')
     pdf.save()
-    response=HttpResponse(buffer.getvalue(),content_type='application/pdf')
-    response['Content-Disposition']=f'attachment; filename="termo-patrimonio-{asset.pk}.pdf"'
-    response['Cache-Control']='private, no-store'
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="termo-patrimonio-{asset.pk}.pdf"'
+    response['Cache-Control'] = 'private, no-store'
     return response

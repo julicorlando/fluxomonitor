@@ -5,6 +5,8 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.http import HttpResponse
 from django.shortcuts import render,redirect
+from django.views.decorators.http import require_POST
+from .final_replays import preview as final_replay_preview,enqueue as enqueue_final_replay
 from .models import WhatsAppConfig,WhatsAppDelivery,HistoryImport,Camera,AuditLog
 from django.utils import timezone
 from .services import report,ZONE
@@ -96,8 +98,22 @@ def settings(request):
         schedule.append({'time':value,'final':slot==final_time(day),'past':slot<local.time().replace(tzinfo=None)})
     future=[item for item in schedule if not item['past']]
     next_send=future[0]['time']+' hoje' if future else daily_times(cfg,day+timedelta(days=1))[0]+' amanhã'
-    response=render(request,'whatsapp.html',{'form':form,'cfg':cfg,'status':status,'error':error,'deliveries':WhatsAppDelivery.objects.order_by('-day','-scheduled_time','-id')[:30],'adjustment':adjustment,'preview':flow_message(local,adjustment['adjusted']),'preview_entries':entries,'schedule':schedule,'next_send':next_send,'recipient_count':len(recipients(cfg)),'recent':recent,'included_count':len(included),'pending_imports':pending_imports,'last_verified':AuditLog.objects.filter(action='whatsapp_verified').order_by('-at').first()})
+    try:final_replay=final_replay_preview(request.user.get_username())
+    except ValueError as exc:final_replay={'rows':[],'token':'','error':str(exc)}
+    from .models import WhatsAppFinalReplay
+    replay_history=WhatsAppFinalReplay.objects.prefetch_related('deliveries').order_by('-created_at','-pk')[:10]
+    response=render(request,'whatsapp.html',{'final_replay':final_replay,'replay_history':replay_history,'form':form,'cfg':cfg,'status':status,'error':error,'deliveries':WhatsAppDelivery.objects.order_by('-day','-scheduled_time','-id')[:30],'adjustment':adjustment,'preview':flow_message(local,adjustment['adjusted']),'preview_entries':entries,'schedule':schedule,'next_send':next_send,'recipient_count':len(recipients(cfg)),'recent':recent,'included_count':len(included),'pending_imports':pending_imports,'last_verified':AuditLog.objects.filter(action='whatsapp_verified').order_by('-at').first()})
     response['Cache-Control']='no-store';return response
+
+@login_required
+@user_passes_test(lambda u:u.is_superuser)
+@require_POST
+def replay_finals(request):
+    try:
+        replay,created=enqueue_final_replay(request.POST.get('preview_token',''),request.user.get_username())
+        messages.success(request,f'Reenvio #{replay.pk} '+('registrado na fila. O monitor processará os destinatários; acompanhe o histórico abaixo.' if created else 'já foi registrado. O clique repetido não criou outro envio.'))
+    except ValueError as exc:messages.error(request,str(exc))
+    return redirect('/whatsapp/#final-replays')
 @login_required
 @user_passes_test(lambda u:u.is_superuser)
 def qr(request):

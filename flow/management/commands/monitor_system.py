@@ -7,6 +7,7 @@ from flow.notifications import scan_system,dispatch_notices,notice,resolve,pulse
 from flow.reliability import process_recoveries
 from flow.preflight import preflight
 from flow.monitor_health import refresh_snapshot
+from flow.final_replays import dispatch_final_replays
 
 
 def recovery_pass():
@@ -22,18 +23,26 @@ def preflight_pass():
     except Exception as error:logging.exception('Falha na conferência antecipada');runtime_failure('preflight',error)
     finally:connections.close_all()
 
+def replay_pass():
+    close_old_connections()
+    try:dispatch_final_replays();resolve('runtime:final_replays')
+    except Exception as error:
+        logging.exception('Falha no reenvio dos fluxos finais');runtime_failure('final_replays',error)
+    finally:connections.close_all()
+
 class Command(BaseCommand):
     help='Monitor independente de falhas e horários de envio; avisos persistidos no banco'
     def add_arguments(self,parser):parser.add_argument('--once',action='store_true')
     def handle(self,*args,**options):
         # Recovery can wait for camera locks/network IO. Keep it off the alert loop.
-        with ThreadPoolExecutor(max_workers=2,thread_name_prefix='recovery') as pool:
-            recovery=None;early=None
+        with ThreadPoolExecutor(max_workers=3,thread_name_prefix='monitor') as pool:
+            recovery=None;early=None;replay=None
             while True:
                 close_old_connections()
-                if options['once']:recovery_pass();preflight_pass()
+                if options['once']:recovery_pass();preflight_pass();replay_pass()
                 elif recovery is None or recovery.done():recovery=pool.submit(recovery_pass)
                 if not options['once'] and (early is None or early.done()):early=pool.submit(preflight_pass)
+                if not options['once'] and (replay is None or replay.done()):replay=pool.submit(replay_pass)
                 try:scan_system();resolve('runtime:scan_system')
                 except Exception as error:
                     logging.exception('Falha no monitor de ocorrências');runtime_failure('scan_system',error)

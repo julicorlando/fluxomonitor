@@ -1,0 +1,20 @@
+<section id="final-replays" class="panel" style="margin-top:28px">
+  <div class="section-head"><div><span class="eyebrow">Envios anteriores</span><h2>Reenviar fluxos finais</h2></div><span class="pill">Desconto fixo de 10%</span></div>
+  <p>Um resumo dos três últimos dias com fluxo final aceito pelo gateway. Usa os totais originais registrados no envio, com 10% descontados uma única vez, mesmo que a margem atual seja diferente.</p>
+  {% if final_replay.error %}<p class="notice" role="alert">{{ final_replay.error }}</p>{% endif %}
+  {% if final_replay.rows %}
+  <div class="message-bubble" style="margin:16px 0"><strong>MENSAGEM AUTOMATICA</strong><p>Fluxos finais · desconto de 10% já aplicado</p>{% for row in final_replay.rows %}<p>{{ row.date_label }} · Fluxo: <strong>{{ row.adjusted }}</strong></p>{% endfor %}</div>
+  {% if final_replay.rows|length < 3 %}<p class="notice">Há apenas {{ final_replay.rows|length }} dia(s) com envio final confirmado no histórico. Serão reenviadas somente essas datas.</p>{% endif %}
+  <form method="post" action="/whatsapp/finals/replay/" data-confirm="Reenviar este resumo para todos os contatos e grupos salvos? Os fluxos já incluem o desconto de 10%.">
+    {% csrf_token %}<input type="hidden" name="preview_token" value="{{ final_replay.token }}">
+    <button {% if not final_replay.token %}disabled{% endif %}>Reenviar fluxos finais</button>
+  </form>
+  <p><small>{{ final_replay.recipient_count }} destinatário(s) salvo(s). Prévia válida por 15 minutos. O reenvio entra em fila e não altera os agendamentos nem as contagens. Se os dados forem revisados depois, este resumo continuará reproduzindo a memória do envio original.</small></p>
+  {% else %}<p>Nenhum resumo disponível para reenvio. São necessários envios finais aceitos com memória de cálculo válida.</p>{% endif %}
+  <details class="section-disclosure"><summary>Histórico dos reenvios</summary>
+    {% for replay in replay_history %}<article><h3>Reenvio #{{ replay.pk }} · {{ replay.created_at }}</h3><p><small>Solicitado por {{ replay.requested_by }}</small></p><p style="white-space:pre-line">{{ replay.text }}</p>
+      {% for delivery in replay.deliveries.all %}<p><strong>{{ delivery.chat_id }}</strong> · {% if delivery.status == 'accepted' %}Aceito pelo gateway{% elif delivery.status == 'pending' %}Na fila{% elif delivery.status == 'sending' %}Enviando{% elif delivery.status == 'unknown' %}Resultado incerto{% else %}Bloqueado{% endif %}<br><small>{{ delivery.detail }}</small></p>{% endfor %}
+    </article>{% empty %}<p>Nenhum reenvio solicitado.</p>{% endfor %}
+  </details>
+  <p><small>A fila aguarda conexão por até 15 minutos. Resultados incertos não são repetidos automaticamente; confira o destinatário antes de solicitar outro reenvio. Aceite do gateway não comprova entrega ou leitura.</small></p>
+</section>

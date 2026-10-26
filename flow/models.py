@@ -137,6 +137,24 @@ class WhatsAppDelivery(models.Model):
     class Meta:
         constraints=[models.UniqueConstraint(fields=['day','scheduled_time','chat_id'],name='unique_whatsapp_day_time_recipient')]
 
+class WhatsAppFinalReplay(models.Model):
+    request_id=models.UUIDField(unique=True)
+    requested_by=models.CharField(max_length=150)
+    created_at=models.DateTimeField(default=timezone.now)
+    snapshot=models.JSONField()
+    text=models.TextField()
+
+class WhatsAppFinalReplayRecipient(models.Model):
+    replay=models.ForeignKey(WhatsAppFinalReplay,on_delete=models.CASCADE,related_name='deliveries')
+    chat_id=models.CharField(max_length=100)
+    status=models.CharField(max_length=20,default='pending')
+    attempted_at=models.DateTimeField(null=True,blank=True)
+    completed_at=models.DateTimeField(null=True,blank=True)
+    gateway_id=models.CharField(max_length=150,blank=True)
+    detail=models.CharField(max_length=250,blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['replay','chat_id'],name='unique_final_replay_recipient')]
+
 class NativeWindow(models.Model):
     camera=models.ForeignKey(Camera,on_delete=models.PROTECT)
     start_time=models.BigIntegerField()

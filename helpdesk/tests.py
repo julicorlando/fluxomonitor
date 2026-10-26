@@ -567,8 +567,7 @@ class HelpdeskTests(TestCase):
                 return {'numberExists': True, 'chatId': self.contact.phone[1:] + '@c.us'}
             raise AssertionError(path)
         gateway.side_effect = response
-        if True:
-            receive_event(self.payload('Oi', **{'from': lid}))
+        receive_event(self.payload('Oi', **{'from': lid}))
         self.assertFalse(Inbound.objects.exists())
         self.assertEqual(UnresolvedInbound.objects.count(), 1)
 
@@ -603,8 +602,7 @@ class HelpdeskTests(TestCase):
                 return {'numberExists': False}
             raise AssertionError(path)
         gateway.side_effect = response
-        if True:
-            receive_event(self.payload('Oi', **{'from': lid}))
+        receive_event(self.payload('Oi', **{'from': lid}))
         self.assertFalse(Inbound.objects.exists())
         self.assertEqual(UnresolvedInbound.objects.count(), 1)
 

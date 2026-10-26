@@ -153,12 +153,14 @@ class HelpdeskTests(TestCase):
 
     def test_human_handoff_and_silent_followups(self):
         self.say('Atendente')
-        ticket = Ticket.objects.get()
+        self.assertFalse(Ticket.objects.exists())
         self.assertEqual(Conversation.objects.get().state, 'human')
         before = Outbound.objects.count()
         self.say('Preciso de atendimento urgente')
+        self.say('1')
         self.assertEqual(Outbound.objects.count(), before)
-        self.assertEqual(ticket.updates.last().text, 'Preciso de atendimento urgente')
+        self.assertFalse(Ticket.objects.exists())
+        self.assertEqual(Conversation.objects.get().state, 'human')
 
     def test_expired_draft_restarts(self):
         self.say('Oi'); self.say('Sim')
@@ -610,18 +612,18 @@ class HelpdeskTests(TestCase):
 
     def test_master_restarts_human_handoff_without_creating_duplicate_ticket(self):
         self.say('Atendente')
-        ticket = Ticket.objects.get()
+        self.assertFalse(Ticket.objects.exists())
         self.assertEqual(Conversation.objects.get().state, 'human')
         before = Outbound.objects.count()
         response = self.client.post(f'/support/inbox/{self.contact.pk}/', {'action': 'restart_bot'})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(Conversation.objects.get().state, 'offer')
-        self.assertEqual(Ticket.objects.count(), 1)
+        self.assertEqual(Ticket.objects.count(), 0)
         self.assertEqual(Outbound.objects.count(), before + 1)
         self.assertIn('1 — Abrir novo chamado', Outbound.objects.latest('pk').text)
         self.say('1')
         self.assertEqual(Conversation.objects.get().state, 'target')
-        self.assertEqual(Ticket.objects.count(), 1)
+        self.assertEqual(Ticket.objects.count(), 0)
         self.client.force_login(self.agent)
         self.assertEqual(self.client.post(f'/support/inbox/{self.contact.pk}/',
             {'action': 'restart_bot'}).status_code, 302)

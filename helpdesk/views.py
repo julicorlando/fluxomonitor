@@ -17,7 +17,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import ContactForm, GrantForm, UpdateForm
 from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket
-from .services import OPEN, audit, company_ids, update_ticket
+from .services import OPEN, audit, company_ids, update_ticket, menu
 from .transport import receive_event, valid_signature
 
 
@@ -239,6 +239,28 @@ def master_inbox(request, contact_id=None):
     if request.method == 'POST':
         if not selected:
             return HttpResponse(status=400)
+        action = request.POST.get('action', 'reply')
+        if action == 'restart_bot':
+            with transaction.atomic():
+                contact = Contact.objects.select_for_update().select_related('company').get(pk=selected.pk)
+                if not BotConfig.objects.filter(pk=1, enabled=True).exists():
+                    messages.error(request, 'Ative o atendimento automático nas configurações antes de reiniciar.')
+                elif not contact.active:
+                    messages.error(request, 'Colaborador inativo; o bot não foi iniciado.')
+                else:
+                    session, _ = Conversation.objects.get_or_create(contact=contact, defaults={'company': contact.company})
+                    session = Conversation.objects.select_for_update().get(pk=session.pk)
+                    session.company = contact.company
+                    session.state, session.draft, session.expires_at = 'offer', {}, timezone.now() + timedelta(hours=2)
+                    session.save(update_fields=['company', 'state', 'draft', 'expires_at', 'updated_at'])
+                    Outbound.objects.create(
+                        contact=contact, company=contact.company, phone=contact.phone,
+                        text=menu(contact), key='master-bot-menu:' + uuid4().hex)
+                    audit(request.user.get_username(), 'support_bot_restart', session, {'contact_id': contact.pk})
+                    messages.success(request, 'Bot reativado. O menu de atendimento foi colocado na fila do WhatsApp.')
+            return redirect(f'/support/inbox/{selected.pk}/')
+        if action != 'reply':
+            return HttpResponse(status=400)
         body = request.POST.get('text', '').strip()
         if not body or len(body) > 4000:
             messages.error(request, 'Informe uma resposta de até 4.000 caracteres.')
@@ -259,6 +281,9 @@ def master_inbox(request, contact_id=None):
         [(m.sent_at, 'in', m) for m in incoming] +
         [(m.created_at, 'out', m) for m in outgoing],
         key=lambda item: (item[0], item[2].pk))
+    conversation = Conversation.objects.filter(contact=selected).first() if selected else None
+    inbound_pending = Inbound.objects.filter(contact=selected, processed_at__isnull=True).count() if selected else 0
     return render(request, 'helpdesk/master_inbox.html', {
         'contacts': contacts, 'selected': selected, 'history': history,
+        'conversation': conversation, 'inbound_pending': inbound_pending,
     })

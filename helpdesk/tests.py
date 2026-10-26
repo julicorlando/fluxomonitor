@@ -511,3 +511,28 @@ class HelpdeskTests(TestCase):
         dispatch()
         self.assertEqual(Outbound.objects.get().status, 'failed')
         self.assertEqual(gateway.call_count, 1)
+
+    def test_master_restarts_human_handoff_without_creating_duplicate_ticket(self):
+        self.say('Atendente')
+        ticket = Ticket.objects.get()
+        self.assertEqual(Conversation.objects.get().state, 'human')
+        before = Outbound.objects.count()
+        response = self.client.post(f'/support/inbox/{self.contact.pk}/', {'action': 'restart_bot'})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Conversation.objects.get().state, 'offer')
+        self.assertEqual(Ticket.objects.count(), 1)
+        self.assertEqual(Outbound.objects.count(), before + 1)
+        self.assertIn('1 — Abrir novo chamado', Outbound.objects.latest('pk').text)
+        self.say('1')
+        self.assertEqual(Conversation.objects.get().state, 'target')
+        self.assertEqual(Ticket.objects.count(), 1)
+        self.client.force_login(self.agent)
+        self.assertEqual(self.client.post(f'/support/inbox/{self.contact.pk}/',
+            {'action': 'restart_bot'}).status_code, 302)
+        self.assertEqual(Outbound.objects.count(), before + 2)
+
+    def test_master_cannot_restart_bot_when_paused(self):
+        BotConfig.objects.filter(pk=1).update(enabled=False)
+        response = self.client.post(f'/support/inbox/{self.contact.pk}/', {'action': 'restart_bot'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Outbound.objects.filter(key__startswith='master-bot-menu:').exists())

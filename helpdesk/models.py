@@ -159,3 +159,14 @@ class Satisfaction(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=['ticket', 'cycle'], name='support_survey_cycle'),
                        models.CheckConstraint(condition=Q(rating__isnull=True) | Q(rating__gte=1, rating__lte=5), name='support_rating_1_5')]
+
+
+class VerifiedChatIdentity(models.Model):
+    """WAHA-confirmed phone-to-chat identity, never derived from message body."""
+    contact = models.OneToOneField(Contact, on_delete=models.CASCADE, related_name='verified_chat')
+    phone = models.CharField(max_length=14)
+    chat_id = models.CharField(max_length=80, db_index=True)
+    checked_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['chat_id', 'phone'], name='support_chat_identity')]

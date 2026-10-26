@@ -5,7 +5,7 @@
 {% include 'helpdesk/tabs.html' %}
 <section class="box" aria-label="Mensagens pendentes de identificação">
   <h2>Triagem de mensagens recebidas ({{ unresolved_count }})</h2>
-  <p class="muted">Mensagens que chegaram pelo WAHA mas ainda não têm telefone confirmado. A equipe master pode visualizar o conteúdo e o identificador. Por segurança, não entram no chatbot e não são associadas automaticamente a um colaborador.</p>
+  <p class="muted">Mensagens que chegaram pelo WAHA mas ainda não têm telefone confirmado. A equipe master pode visualizar o conteúdo e o identificador. Após a primeira confirmação do master, o vínculo fica salvo e as próximas mensagens desse identificador seguem automaticamente para o chatbot.</p>
   <div style="max-height:320px;overflow:auto">
   {% for event in unresolved %}
     <article style="padding:12px;margin:8px 0;border:1px solid var(--border,#ddd);border-radius:10px">
@@ -33,6 +33,16 @@
     {% if selected %}
       <h2>{{ selected.name }}</h2>
       <p class="muted">{{ selected.company.code }} · {{ selected.phone }} · {{ selected.email }}</p>
+      <section class="box" aria-label="Reconhecimento automático">
+        <h3>Reconhecimento automático</h3>
+        {% for binding in sender_bindings %}
+          <p><strong>Vínculo permanente ativo</strong> · {{ binding.get_source_display }}</p>
+          <p style="overflow-wrap:anywhere"><small>{{ binding.chat_id }}</small></p>
+          <p class="muted">As próximas mensagens deste identificador serão reconhecidas automaticamente, inclusive após enviar respostas ou reiniciar o sistema.</p>
+        {% empty %}
+          <p class="muted">Sem vínculo permanente de remetente. Quando houver uma primeira identificação pendente, confirme o titular uma vez abaixo.</p>
+        {% endfor %}
+      </section>
       <section class="box">
         <h3>Vincular resposta pendente ao colaborador</h3>
         <p class="muted">Somente após confirmar, por ligação ou outro canal independente, que este colaborador é o titular do WhatsApp. O LID não é prova de identidade por si só.</p>
@@ -49,7 +59,7 @@
           <label><input type="checkbox" name="identity_confirmed" value="yes" required> Confirmei a identidade do titular por canal independente e autorizo vincular este LID ao cadastro selecionado.</label>
           <button type="submit">Vincular e processar respostas</button>
         </form>
-        <p class="muted">A ação é auditada e recupera as mensagens das últimas 24 horas. Chamados não são criados automaticamente sem seguir o fluxo de confirmação.</p>
+        <p class="muted">A ação é auditada, salva um vínculo permanente e recupera as mensagens das últimas 24 horas. Não é necessário vincular cada resposta. Chamados não são criados automaticamente sem seguir o fluxo de confirmação.</p>
       </section>
       <section class="box">
         <h3>Atendimento automático</h3>

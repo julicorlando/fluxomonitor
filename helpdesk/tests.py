@@ -652,10 +652,11 @@ class HelpdeskTests(TestCase):
         url = f'/support/inbox/{self.contact.pk}/'
         denied = self.client.post(url, {'action': 'verify_lid', 'lid': lid})
         self.assertEqual(denied.status_code, 302)
-        self.assertFalse(VerifiedChatIdentity.objects.exists())
+        from .models import SenderIdentity
+        self.assertFalse(SenderIdentity.objects.exists())
         allowed = self.client.post(url, {'action': 'verify_lid', 'lid': lid, 'identity_confirmed': 'yes'})
         self.assertEqual(allowed.status_code, 302)
-        self.assertEqual(VerifiedChatIdentity.objects.get(contact=self.contact).chat_id, lid)
+        self.assertEqual(SenderIdentity.objects.get(contact=self.contact).chat_id, lid)
         item = Inbound.objects.get(external_id=event.external_id)
         self.assertEqual(item.contact, self.contact)
         self.assertEqual(UnresolvedInbound.objects.get(pk=event.pk).status, 'linked')

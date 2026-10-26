@@ -182,3 +182,13 @@ class UnresolvedInbound(models.Model):
     last_seen_at = models.DateTimeField(auto_now=True)
     attempts = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, default='unresolved')
+
+
+class SenderIdentity(models.Model):
+    """Durable inbound identity, separate from WAHA's mutable outbound destination cache."""
+    chat_id = models.CharField(max_length=80, unique=True)
+    contact = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name='sender_identities')
+    phone = models.CharField(max_length=14)
+    source = models.CharField(max_length=12, choices=[('master', 'Confirmado pelo master'), ('gateway', 'Confirmado pelo WAHA'), ('legacy', 'Vínculo anterior validado')])
+    confirmed_by = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

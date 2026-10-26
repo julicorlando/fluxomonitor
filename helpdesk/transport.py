@@ -15,6 +15,7 @@ from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from flow.whatsapp import gateway, session_info
 from .identity import phone_from_chat
+from .bindings import enrolled_binding, usable, remember_sender
 from .models import BotConfig, Contact, DeliveryAck, Inbound, Outbound, VerifiedChatIdentity, UnresolvedInbound
 
 
@@ -67,6 +68,12 @@ def ensure_webhook():
 def verified_destination(contact):
     """Resolve Brazilian WhatsApp IDs via the official WAHA number-check API."""
     from urllib.parse import urlencode
+    # A confirmed sender is already an authorized destination. No repeated remote
+    # identity check is needed, and check-exists must not erase this association.
+    bindings = contact.sender_identities.filter(phone=contact.phone) if contact.active else contact.sender_identities.none()
+    known = bindings.filter(source='master').first() or bindings.order_by('-created_at', '-pk').first()
+    if known:
+        return known.chat_id
     number = contact.phone.lstrip('+')
     result = gateway('GET', '/api/contacts/check-exists?' + urlencode({'phone': number, 'session': 'default'}))
     if not isinstance(result, dict) or result.get('numberExists') is not True:
@@ -79,11 +86,17 @@ def verified_destination(contact):
     if pn and phone_from_chat(pn) != contact.phone:
         raise ValidationError('WAHA retornou número diferente do cadastro.')
     VerifiedChatIdentity.objects.update_or_create(contact=contact, defaults={'phone': contact.phone, 'chat_id': chat})
+    if chat.endswith('@lid'):
+        remember_sender(contact, chat)
     return chat
 
 
 def resolve_phone(payload):
     sender = payload.get('from')
+    # Local durable authorization always precedes external WAHA calls.
+    known = enrolled_binding(sender)
+    if known:
+        return known.phone if usable(known) else None
     phone = phone_from_chat(sender)
     if phone:
         return phone
@@ -101,11 +114,6 @@ def resolve_phone(payload):
     mapped = gateway('GET', '/api/default/lids/' + sender)
     phone = phone_from_chat(mapped.get('pn')) if isinstance(mapped, dict) else None
     if not phone:
-        identity = VerifiedChatIdentity.objects.filter(chat_id=sender, contact__active=True,
-            phone=models.F('contact__phone')).select_related('contact').first()
-        if identity:
-            return identity.phone
-
         # Contact lookup uses a different NOWEB path than /lids and can expose
         # the verified PN held by Baileys even when /lids returns pn=null.
         # A contact name or freeform message is never sufficient for identity.
@@ -118,6 +126,7 @@ def resolve_phone(payload):
             if candidate and Contact.objects.filter(phone=candidate, active=True).exists():
                 # Cache only a mapping supplied by WAHA contact resolution.
                 matched = Contact.objects.get(phone=candidate, active=True)
+                remember_sender(matched, sender)
                 VerifiedChatIdentity.objects.update_or_create(contact=matched, defaults={
                     'phone': matched.phone, 'chat_id': sender})
                 logging.info('Suporte WAHA: LID resolvido por consulta de contato, contact=%s', matched.pk)
@@ -144,6 +153,7 @@ def resolve_phone(payload):
                 break
         if len(matches) == 1:
             enrolled = matches[0]
+            remember_sender(enrolled, sender)
             VerifiedChatIdentity.objects.update_or_create(contact=enrolled, defaults={
                 'phone': enrolled.phone, 'chat_id': sender})
             logging.info('Suporte WAHA: LID resolvido por check-exists, contact=%s', enrolled.pk)
@@ -198,6 +208,9 @@ def receive_event(event):
     contact = Contact.objects.filter(phone=phone, active=True).first() if phone else None
     if not contact:
         return
+    sender = payload.get('from')
+    if isinstance(sender, str) and sender.endswith('@lid'):
+        remember_sender(contact, sender)
     try:
         stamp = float(payload.get('timestamp'))
         sent = datetime.fromtimestamp(stamp, tz=dt_timezone.utc)

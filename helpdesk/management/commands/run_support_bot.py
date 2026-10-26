@@ -6,11 +6,13 @@ from django.db import close_old_connections, connections
 from django.utils import timezone
 from helpdesk.models import BotConfig, Inbound
 from helpdesk.services import process_message
+from helpdesk.bindings import recover_bound_pending
 from helpdesk.transport import dispatch, ensure_webhook
 from flow.notifications import runtime_failure, resolve
 
 
 def inbox_pass():
+    recover_bound_pending()
     for pk in Inbound.objects.filter(processed_at__isnull=True, attempts__lt=5).order_by('id').values_list('id', flat=True)[:50]:
         try:
             process_message(pk)

@@ -259,3 +259,9 @@ APIs autenticadas por sessão do GesTi, sempre limitadas às empresas do operado
 - `POST /support/webhook/`: somente gateway com HMAC válido; confirma após persistir mensagens elegíveis.
 
 O módulo não usa IA externa nem envia descrições a serviços de linguagem. Nesta versão, anexos/áudios não são baixados: a triagem solicita descrição por escrito. Cadastro e chamados são preservados no mesmo backup PostgreSQL já existente; a administração Django é somente leitura para estes modelos, para não contornar notificações e permissões.
+
+#### Vínculo permanente de remetentes WhatsApp
+
+A identificação de entrada usa `SenderIdentity`, separado do cache de destino `VerifiedChatIdentity`. Um colaborador pode ter vários identificadores confirmados; cada identificador pertence a um único colaborador. O master confirma a identidade uma vez em **Conversas WhatsApp**. Enviar respostas, atualizar o cache do WAHA ou reiniciar os serviços não desfaz o vínculo. A resolução consulta o vínculo local antes de fazer qualquer consulta remota. Mudança de telefone e cadastro inativo impedem o reaproveitamento automático da autorização antiga.
+
+A migração recupera associações anteriores válidas e confirmações auditadas cujo telefone possa ser comprovado pelo registro original de entrada. Associações conflitantes não são atribuídas por suposição. O worker recupera automaticamente mensagens pendentes das últimas 24 horas que já tenham vínculo válido, mantendo a deduplicação pelo ID da mensagem e sem transferir mensagens entre colaboradores ou empresas. O painel mostra os vínculos permanentes e a origem da confirmação. `python manage.py check_support_bindings --contact ID` faz uma verificação de reconhecimento sem enviar mensagens.

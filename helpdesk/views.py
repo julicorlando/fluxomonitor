@@ -17,9 +17,10 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import ContactForm, GrantForm, UpdateForm
-from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound, VerifiedChatIdentity
+from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound, VerifiedChatIdentity, SenderIdentity
 from .services import OPEN, audit, company_ids, update_ticket, menu
 from .transport import receive_event, valid_signature
+from .bindings import remember_sender, import_pending
 
 
 def visible(user):
@@ -248,29 +249,22 @@ def master_inbox(request, contact_id=None):
             if not confirmed or not re.fullmatch(r'[0-9]+@lid', lid):
                 messages.error(request, 'Confirme a identidade do titular por canal independente e informe um LID válido.')
                 return redirect(f'/support/inbox/{selected.pk}/')
-            with transaction.atomic():
-                contact = Contact.objects.select_for_update().get(pk=selected.pk)
-                pending = list(UnresolvedInbound.objects.select_for_update().filter(
-                    sender=lid, status='unresolved', sent_at__gte=timezone.now() - timedelta(hours=24)
-                ).order_by('sent_at', 'id'))
-                conflicts = VerifiedChatIdentity.objects.filter(chat_id=lid).exclude(contact=contact).exists()
-                if not contact.active or conflicts or not pending:
-                    messages.error(request, 'Vínculo não permitido: cadastro inativo, LID já associado ou nenhuma mensagem recente pendente.')
-                else:
-                    VerifiedChatIdentity.objects.update_or_create(contact=contact, defaults={
-                        'phone': contact.phone, 'chat_id': lid})
-                    imported = 0
-                    for event in pending:
-                        _, created = Inbound.objects.get_or_create(external_id=event.external_id, defaults={
-                            'contact': contact, 'company': contact.company, 'phone': contact.phone,
-                            'text': event.text, 'sent_at': event.sent_at})
-                        event.status = 'linked'
-                        event.save(update_fields=['status', 'last_seen_at'])
-                        imported += int(created)
+            try:
+                with transaction.atomic():
+                    contact = Contact.objects.select_for_update().get(pk=selected.pk)
+                    has_pending = UnresolvedInbound.objects.filter(sender=lid, status='unresolved',
+                        sent_at__gte=timezone.now() - timedelta(hours=24)).exists()
+                    conflicts = VerifiedChatIdentity.objects.filter(chat_id=lid).exclude(contact=contact).exists()
+                    if not has_pending or conflicts:
+                        raise ValidationError('Vínculo não permitido: identificador já associado ou nenhuma mensagem recente pendente.')
+                    binding = remember_sender(contact, lid, source='master', actor=request.user.get_username())
+                    imported = import_pending(binding)
                     audit(request.user.get_username(), 'support_lid_verified', contact,
-                          {'lid': lid, 'contact_id': contact.pk, 'messages_imported': imported,
-                           'verification': 'master_confirmed_out_of_band'})
-                    messages.success(request, f'Identidade vinculada. {imported} mensagem(ns) encaminhada(s) ao bot.')
+                          {'lid': lid, 'contact_id': contact.pk, 'phone': contact.phone, 'messages_imported': imported,
+                           'verification': 'master_confirmed_out_of_band', 'persistent_binding': binding.pk})
+                    messages.success(request, f'Vínculo permanente salvo. {imported} mensagem(ns) encaminhada(s) ao bot. As próximas respostas serão reconhecidas automaticamente.')
+            except ValidationError as exc:
+                messages.error(request, ' '.join(exc.messages))
             return redirect(f'/support/inbox/{selected.pk}/')
         if action == 'restart_bot':
             with transaction.atomic():
@@ -320,4 +314,5 @@ def master_inbox(request, contact_id=None):
         'unresolved': unresolved, 'unresolved_count': UnresolvedInbound.objects.filter(status='unresolved').count(),
         'contacts': contacts, 'selected': selected, 'history': history,
         'conversation': conversation, 'inbound_pending': inbound_pending,
+        'sender_bindings': SenderIdentity.objects.filter(contact=selected, phone=selected.phone) if selected else [],
     })

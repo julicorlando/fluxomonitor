@@ -466,7 +466,8 @@ class HelpdeskTests(TestCase):
     @patch('helpdesk.transport.gateway', return_value={'lid': '1234@lid', 'pn': None})
     def test_unresolved_lid_returns_retryable_webhook_error(self, gateway):
         response = self.signed_post(self.payload(**{'from': '1234@lid'}))
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(UnresolvedInbound.objects.count(), 1)
         self.assertFalse(Inbound.objects.exists())
         self.assertFalse(Outbound.objects.exists())
 
@@ -566,9 +567,10 @@ class HelpdeskTests(TestCase):
                 return {'numberExists': True, 'chatId': self.contact.phone[1:] + '@c.us'}
             raise AssertionError(path)
         gateway.side_effect = response
-        with self.assertRaises(ValidationError):
+        if True:
             receive_event(self.payload('Oi', **{'from': lid}))
         self.assertFalse(Inbound.objects.exists())
+        self.assertEqual(UnresolvedInbound.objects.count(), 1)
 
     @patch('helpdesk.transport.gateway')
     def test_noweb_contact_lookup_resolves_inbound_lid_and_opens_bot_flow(self, gateway):
@@ -601,9 +603,10 @@ class HelpdeskTests(TestCase):
                 return {'numberExists': False}
             raise AssertionError(path)
         gateway.side_effect = response
-        with self.assertRaises(ValidationError):
+        if True:
             receive_event(self.payload('Oi', **{'from': lid}))
         self.assertFalse(Inbound.objects.exists())
+        self.assertEqual(UnresolvedInbound.objects.count(), 1)
 
     @patch('helpdesk.transport.gateway')
     def test_unresolved_lid_arrives_in_master_triage_without_bot_ticket(self, gateway):

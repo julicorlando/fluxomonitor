@@ -1,4 +1,7 @@
 """Scoped IT inventory, approved procedures, recurrence management and automation UI."""
+import tempfile
+from pathlib import Path
+from django.core.management import call_command, CommandError
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.paginator import Paginator
@@ -253,3 +256,46 @@ def asset_attachment(request, attachment_id):
     response['X-Content-Type-Options'] = 'nosniff'
     response['Cache-Control'] = 'private, no-store'
     return response
+
+
+@login_required
+@master
+@never_cache
+def import_assets(request):
+    """Admin-only upload for the 210-asset snapshot, with explicit review of 5 company gaps."""
+    pending = [('13','000001'), ('14','0000011'), ('37','000005'),
+               ('38','000006'), ('176','000224')]
+    available = Company.objects.order_by('code')
+    if request.method == 'POST':
+        uploaded = request.FILES.get('inventory_csv')
+        assignments = {}
+        codes = set(available.values_list('code', flat=True))
+        for source_id, _ in pending:
+            choice = request.POST.get('company_' + source_id, '')
+            if choice in codes:
+                assignments[source_id] = choice
+        if not uploaded or not uploaded.name.lower().endswith('.csv') or uploaded.size > 5_000_000:
+            messages.error(request,'Selecione o CSV do inventário (até 5 MB).')
+        elif len(assignments) != len(pending):
+            messages.error(request,'Escolha uma empresa válida para cada patrimônio sem departamento.')
+        else:
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as tmp:
+                    temp_path = Path(tmp.name)
+                    for chunk in uploaded.chunks():
+                        tmp.write(chunk)
+                args = [f'--assign={source_id}={code}' for source_id,code in assignments.items()]
+                # The importer validates all rows before starting a database transaction.
+                call_command('import_legacy_assets', str(temp_path), *args, '--apply', verbosity=0)
+                audit(request.user.get_username(), 'support_assets_legacy_import', request.user,
+                      {'source':'legacy_210_csv','approved_unassigned': assignments})
+                messages.success(request,'Importação processada. O comando evita duplicar patrimônios existentes.')
+                return redirect('/support/assets/')
+            except (CommandError, UnicodeError, ValueError) as exc:
+                messages.error(request, 'Importação não realizada: ' + str(exc)[:300])
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
+    return render(request,'helpdesk/asset_import.html',
+                  {'pending':pending,'companies':available})

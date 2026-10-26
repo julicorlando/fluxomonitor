@@ -543,6 +543,8 @@ class HelpdeskTests(TestCase):
         def response(method, path, *args):
             if '/lids/' in path:
                 return {'pn': None}
+            if path.startswith('/api/contacts?'):
+                return {'id': lid, 'number': None}
             if 'check-exists' in path:
                 return {'numberExists': True, 'chatId': lid if self.contact.phone[1:] in path else self.other.phone[1:] + '@c.us', 'pn': self.contact.phone[1:] + '@c.us' if self.contact.phone[1:] in path else self.other.phone[1:] + '@c.us'}
             raise AssertionError(path)
@@ -560,6 +562,41 @@ class HelpdeskTests(TestCase):
                 return {'pn': None}
             if 'check-exists' in path:
                 return {'numberExists': True, 'chatId': self.contact.phone[1:] + '@c.us'}
+            raise AssertionError(path)
+        gateway.side_effect = response
+        with self.assertRaises(ValidationError):
+            receive_event(self.payload('Oi', **{'from': lid}))
+        self.assertFalse(Inbound.objects.exists())
+
+    @patch('helpdesk.transport.gateway')
+    def test_noweb_contact_lookup_resolves_inbound_lid_and_opens_bot_flow(self, gateway):
+        lid = '262453002793117@lid'
+        def response(method, path, *args):
+            if '/lids/' in path:
+                return {'lid': lid, 'pn': None}
+            if path.startswith('/api/contacts?'):
+                return {'id': lid, 'number': self.contact.phone[1:]}
+            raise AssertionError(path)
+        gateway.side_effect = response
+        event = self.payload('Oi', **{'from': lid})
+        receive_event(event)
+        received = Inbound.objects.get(external_id=event['payload']['id'])
+        self.assertEqual(received.contact, self.contact)
+        process_message(received.pk)
+        self.assertEqual(Conversation.objects.get(contact=self.contact).state, 'offer')
+        self.assertTrue(Outbound.objects.filter(contact=self.contact, key=f'inbound:{received.pk}').exists())
+        self.assertEqual(self.contact.verified_chat.chat_id, lid)
+
+    @patch('helpdesk.transport.gateway')
+    def test_noweb_contact_lookup_rejects_unregistered_number(self, gateway):
+        lid = '262453002793117@lid'
+        def response(method, path, *args):
+            if '/lids/' in path:
+                return {'lid': lid, 'pn': None}
+            if path.startswith('/api/contacts?'):
+                return {'id': lid, 'number': '5581988889999'}
+            if 'check-exists' in path:
+                return {'numberExists': False}
             raise AssertionError(path)
         gateway.side_effect = response
         with self.assertRaises(ValidationError):

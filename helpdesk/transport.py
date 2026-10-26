@@ -208,20 +208,27 @@ def dispatch(limit=5):
             external = str(external)[:250]
             if external:
                 status, detail = 'accepted', 'Aceito pelo gateway; aguardando confirmação de entrega.'
+            else:
+                detail = 'Gateway respondeu sem ID de mensagem; conferir API WAHA e registros do serviço support.'
+                logging.error('Suporte WAHA: sendText respondeu sem identificador, tipo=%s, outbound=%s', type(result).__name__, pk)
         except HTTPError as exc:
             if exc.code == 429:
                 retry = True
                 detail = 'Limite temporário do gateway; aguardando nova tentativa.'
             elif 400 <= exc.code < 500:
                 status, detail = 'failed', f'Envio recusado pelo gateway (HTTP {exc.code}).'
+            else:
+                detail = f'Falha HTTP {exc.code} do gateway; resultado incerto.'
+            logging.error('Suporte WAHA: sendText HTTP %s, outbound=%s', exc.code, pk)
         except URLError as exc:
             # Only connection refusal/name resolution conclusively precede sending a request.
             import socket
             if isinstance(exc.reason, (ConnectionRefusedError, socket.gaierror)):
                 retry = True
                 detail = 'Gateway indisponível antes do envio; aguardando nova tentativa.'
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.exception('Suporte WAHA: erro em sendText, tipo=%s, outbound=%s', type(exc).__name__, pk)
+            detail = f'Erro {type(exc).__name__} durante envio WAHA; resultado incerto.'
         if retry:
             status = 'pending' if item.attempts < 5 else 'failed'
         Outbound.objects.filter(pk=pk, status='sending').update(status=status, detail=detail,

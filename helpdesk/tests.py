@@ -258,7 +258,7 @@ class HelpdeskTests(TestCase):
 
     def test_pending_rating_blocks_opening_and_human_shortcuts(self):
         ticket = self.update(self.ticket(), status='resolved')
-        for text in ['Olá', 'Sim', 'novo', 'ATENDENTE', 'CANCELAR', 'REINICIAR', '0', '6', 'ótimo']:
+        for text in ['Olá', 'Sim', 'novo', 'CANCELAR', 'REINICIAR', '0', '6', 'ótimo']:
             self.say(text)
             self.assertIn(ticket.code, Outbound.objects.latest('pk').text)
             self.assertIn('avaliação é obrigatória', Outbound.objects.latest('pk').text)
@@ -282,7 +282,7 @@ class HelpdeskTests(TestCase):
 
     def test_rating_precedes_every_conversation_state(self):
         self.update(self.ticket(), status='resolved')
-        for state in ['idle', 'offer', 'target', 'description', 'confirm', 'human', 'lookup', 'note']:
+        for state in ['idle', 'offer', 'target', 'description', 'confirm', 'lookup', 'note']:
             Conversation.objects.update(state=state)
             self.say('Não consigo abrir outro chamado')
             self.assertIn('avaliação é obrigatória', Outbound.objects.latest('pk').text)
@@ -609,6 +609,20 @@ class HelpdeskTests(TestCase):
         dispatch()
         self.assertEqual(Outbound.objects.get().status, 'failed')
         self.assertEqual(gateway.call_count, 1)
+
+    def test_atendente_overrides_pending_rating_and_stays_silent(self):
+        ticket = self.update(self.ticket(), status='resolved')
+        self.say('ATENDENTE')
+        self.assertEqual(Conversation.objects.get().state, 'human')
+        self.assertEqual(Ticket.objects.count(), 1)
+        before = Outbound.objects.count()
+        self.say('Preciso falar com uma pessoa')
+        self.say('REINICIAR')
+        self.say('5')
+        self.assertEqual(Outbound.objects.count(), before)
+        self.assertEqual(Conversation.objects.get().state, 'human')
+        self.assertFalse(Ticket.objects.filter(status='open').exists())
+        self.assertEqual(Satisfaction.objects.get(ticket=ticket).rating, None)
 
     def test_master_restarts_human_handoff_without_creating_duplicate_ticket(self):
         self.say('Atendente')

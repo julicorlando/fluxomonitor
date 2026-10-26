@@ -236,3 +236,26 @@ A memória do envio é preservada: a operação não recalcula contagens atuais 
 A mensagem contém o cabeçalho `MENSAGEM AUTOMATICA`, o título `Fluxos finais` e as linhas de data e valor. O desconto permanece no cálculo, sem ser mencionado no texto enviado. É obrigatório escolher um destino; formulários antigos precisam ser atualizados e nunca enviam automaticamente para todos.
 
 O monitor independente (`monitor_system`, serviço `notifier`) processa a fila sem bloquear o painel. O destino fica registrado no histórico de reenvios. Contatos ou grupos salvos que forem removidos antes do processamento são bloqueados. Números informados manualmente são autorizados somente para aquela solicitação, mesmo que não estejam na agenda salva. A fila expira após 15 minutos sem conclusão; resultados incertos ou processos interrompidos durante o envio não são repetidos automaticamente. Confira o WhatsApp antes de solicitar um novo reenvio. Aceite do gateway não comprova entrega ou leitura no celular.
+
+### Suporte de TI multiempresa no GesTi
+
+O menu **Suporte de TI** integra atendimento à sessão WAHA `default` já existente. As migrações criam as empresas **PDU, CM, SC, EVPI, PRED, FRT e TSP**, cada uma com contador de chamados independente (`PDU-00001`). Não são criados colaboradores de demonstração ou destinatários automaticamente.
+
+1. Como superadmin, abra **Suporte de TI → Colaboradores** e cadastre individualmente empresa, nome, número e e-mail. Somente telefones brasileiros com DDD 81; formatos com parênteses, espaços e `+55` são normalizados. Não há inferência da empresa pelo DDD nem alteração automática do nono dígito.
+2. **Configuração e acessos** permite pausar o bot e conceder a operadores existentes acesso às empresas selecionadas. Superadmins veem todas. Operadores sem vínculo não veem chamados de outra empresa, inclusive nas APIs.
+3. O serviço Compose `support` executa `python manage.py run_support_bot`. Ao iniciar e a cada minuto, confere e configura o webhook na sessão existente, preservando os outros webhooks e parâmetros. Uma alteração de configuração pode reiniciar brevemente a sessão WAHA, sem logout ou remoção da autenticação.
+4. Cadastros ativos recebem triagem, coleta de setor/equipamento, descrição e confirmação antes da abertura. Números desconhecidos/inativos, grupos, mensagens próprias e eventos antigos são ignorados silenciosamente; nenhum chamado ou resposta é gerado para eles. `CANCELAR`, `RECOMEÇAR` e `ATENDENTE` são reconhecidos. O atendimento humano permite receber complementos sem respostas automáticas a cada mensagem.
+5. O painel atualiza a cada cinco segundos e preserva formulários em edição. Atualizações públicas e mudanças de status geram mensagens; anotações internas nunca são enviadas. O fechamento solicita nota de 1 a 5 com `AVALIAR PROTOCOLO NOTA`; o comentário opcional usa `FEEDBACK PROTOCOLO texto`. A pesquisa vale sete dias. Reabertura cancela pesquisas pendentes anteriores.
+
+O recebimento usa HMAC-SHA512 sobre o corpo original do webhook, com chave específica derivada de `SECRET_KEY`. O endereço padrão é `http://web:8000/support/webhook/` na rede interna do Compose, com cabeçalho Host `localhost`. Opcionalmente, `SUPPORT_WEBHOOK_URL` no ambiente do worker pode apontar para outro endereço alcançável pelo WAHA. A chave não aparece nas telas. Identificadores `@lid` são resolvidos por metadados do gateway ou API de mapeamento; não por números escritos na mensagem. Sem mapeamento verificável, não há associação ao cadastro.
+
+As filas de entrada/saída ficam no PostgreSQL e não exigem Redis ou Celery adicionais. Bloqueios por contato serializam a conversa, a confirmação é idempotente por mensagem e o contador por empresa é bloqueado na transação. Requisições duplicadas e mensagens antigas fora de ordem não abrem chamados repetidos. Envios têm histórico próprio em **Mensagens e falhas**, independente dos envios de fluxo. Falhas anteriores ao envio e HTTP 429 têm tentativas com espera crescente; timeouts/erros ambíguos são `Resultado incerto`, sem repetição automática. Mensagens pendentes expiram após 24 horas. Aceite, entrega e leitura são estados distintos; entrega/leitura dependem de eventos `message.ack` do gateway. Interrupções são registradas também no monitor de avisos existente.
+
+APIs autenticadas por sessão do GesTi, sempre limitadas às empresas do operador:
+
+- `GET /api/support/tickets/`: lista paginada (50), filtros `company`, `status`, `page`.
+- `GET /api/support/tickets/{id}/`: dados e histórico do chamado.
+- `POST /api/support/tickets/{id}/updates/`: JSON com `status`, `text`, `revision`, `internal` (opcional) e `assigned_to` (opcional); exige CSRF. Conflito de revisão retorna 409.
+- `POST /support/webhook/`: somente gateway com HMAC válido; confirma após persistir mensagens elegíveis.
+
+O módulo não usa IA externa nem envia descrições a serviços de linguagem. Nesta versão, anexos/áudios não são baixados: a triagem solicita descrição por escrito. Cadastro e chamados são preservados no mesmo backup PostgreSQL já existente; a administração Django é somente leitura para estes modelos, para não contornar notificações e permissões.

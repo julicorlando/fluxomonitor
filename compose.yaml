@@ -34,8 +34,8 @@ services:
       WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}
       SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY}
       DATABASE_URL: postgres://fluxo:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@db:5432/fluxo
-      ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1,helpdesk.shoppingcarpina.com.br
-      CSRF_TRUSTED_ORIGINS: https://fluxo.axionwebdigital.com.br
+      ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1,web,helpdesk.shoppingcarpina.com.br
+      CSRF_TRUSTED_ORIGINS: https://fluxo.axionwebdigital.com.br,https://helpdesk.shoppingcarpina.com.br
     depends_on:
       db:
         condition: service_healthy
@@ -74,6 +74,14 @@ services:
     restart: unless-stopped
     environment: *env
     command: ["python", "manage.py", "monitor_system"]
+    depends_on:
+      web:
+        condition: service_healthy
+  support:
+    build: .
+    restart: unless-stopped
+    environment: *env
+    command: ["python", "manage.py", "run_support_bot"]
     depends_on:
       web:
         condition: service_healthy

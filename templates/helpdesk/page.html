@@ -1,0 +1,1 @@
+{% if tickets.has_previous %}<a href="?{{ filters }}&page={{ tickets.previous_page_number }}">Anterior</a>{% endif %} <span>Página {{ tickets.number }} de {{ tickets.paginator.num_pages }}</span> {% if tickets.has_next %}<a href="?{{ filters }}&page={{ tickets.next_page_number }}">Próxima</a>{% endif %}

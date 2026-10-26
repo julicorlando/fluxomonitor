@@ -1,0 +1,287 @@
+"""Transactional help desk rules. Network calls belong to transport.py only."""
+import re
+import unicodedata
+from datetime import timedelta
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
+from django.utils import timezone
+from flow.models import AuditLog
+from .models import (AgentGrant, BotConfig, Company, Contact, Conversation, Inbound,
+                     Outbound, Satisfaction, Ticket, TicketUpdate)
+
+STATUS = dict(Ticket.STATUS)
+OPEN = ('open', 'working', 'waiting')
+TRANSITIONS = {
+    'open': {'working', 'waiting', 'resolved', 'cancelled'},
+    'working': {'waiting', 'resolved', 'cancelled'},
+    'waiting': {'working', 'resolved', 'cancelled'},
+    'resolved': {'working', 'closed'},
+    'closed': {'working'}, 'cancelled': {'open'},
+}
+
+
+def audit(actor, action, obj, changes):
+    AuditLog.objects.create(actor=str(actor)[:150], action=action, object_type=type(obj).__name__,
+                            object_id=str(obj.pk), changes=changes)
+
+
+def company_ids(user):
+    if not user.is_active or not user.is_staff:
+        return Company.objects.none().values_list('pk', flat=True)
+    if user.is_superuser:
+        return Company.objects.values_list('pk', flat=True)
+    return AgentGrant.objects.filter(user=user).values_list('company_id', flat=True)
+
+
+def queue(contact, text, key, ticket=None, company_id=None, phone=None):
+    return Outbound.objects.get_or_create(key=key, defaults={
+        'contact': contact, 'company_id': company_id or contact.company_id,
+        'phone': phone or contact.phone, 'text': text, 'ticket': ticket,
+    })[0]
+
+
+def reply(message, text, ticket=None):
+    return queue(message.contact, text, f'inbound:{message.pk}', ticket, message.company_id, message.phone)
+
+
+def normalized(text):
+    return ''.join(c for c in unicodedata.normalize('NFKD', text.strip().lower()) if not unicodedata.combining(c))
+
+
+def create_ticket(session, message):
+    company = Company.objects.select_for_update().get(pk=session.company_id)
+    company.last_ticket += 1
+    company.save(update_fields=['last_ticket'])
+    contact = message.contact
+    ticket = Ticket.objects.create(
+        company=company, number=company.last_ticket, code=f'{company.code}-{company.last_ticket:05d}',
+        contact=contact, requester_name=contact.name, requester_phone=message.phone,
+        requester_email=contact.email, target=session.draft['target'], description=session.draft['description'])
+    TicketUpdate.objects.create(ticket=ticket, author=contact.name, text='Chamado aberto pelo WhatsApp.')
+    audit(contact.name, 'support_open', ticket, {'code': ticket.code})
+    return ticket
+
+
+def pending_surveys(contact):
+    return Satisfaction.objects.filter(ticket__contact=contact, ticket__company=contact.company,
+        ticket__requester_phone=contact.phone, cancelled=False, answered_at__isnull=True,
+        expires_at__gt=timezone.now()).select_related('ticket').order_by('-id')
+
+
+def menu(contact):
+    existing = list(Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).values_list('code', flat=True)[:5])
+    if existing:
+        return ('Você tem chamados em aberto: ' + ', '.join(existing) +
+                '.\n1 — Abrir novo chamado\n2 — Consultar andamento\n3 — Complementar chamado\n4 — Falar com atendente\nOu envie CANCELAR.')
+    return (f'Olá, {contact.name}! Identifiquei seu cadastro na {contact.company.code}. '
+            'Você entrou em contato com o Suporte de TI. Deseja abrir um novo chamado?\n1 — Sim\n2 — Não\nOu envie ATENDENTE.')
+
+
+@transaction.atomic
+def process_message(message_id):
+    # Lock the contact before its session: the same lock is used by all administrative changes.
+    initial = Inbound.objects.get(pk=message_id)
+    contact = Contact.objects.select_for_update().select_related('company').get(pk=initial.contact_id)
+    message = Inbound.objects.select_for_update().get(pk=message_id)
+    if message.processed_at:
+        return
+    message.contact = contact
+    now = timezone.now()
+    if (not BotConfig.objects.filter(pk=1, enabled=True).exists() or not contact.active or
+            message.company_id != contact.company_id or message.phone != contact.phone or
+            now - message.sent_at > timedelta(hours=24)):
+        message.processed_at = now
+        message.error = 'Ignorado: cadastro alterado, inativo, bot pausado ou mensagem antiga.'
+        message.save(update_fields=['processed_at', 'error'])
+        return
+    session, _ = Conversation.objects.get_or_create(contact=contact, defaults={'company': contact.company})
+    session = Conversation.objects.select_for_update().get(pk=session.pk)
+    if Inbound.objects.filter(contact=contact, id__lt=message.pk, processed_at__isnull=True, attempts__lt=5).exists():
+        return
+    if session.last_sent_at and message.sent_at < session.last_sent_at:
+        message.processed_at, message.error = now, 'Mensagem antiga recebida fora de ordem; não alterou a conversa.'
+        message.save(update_fields=['processed_at', 'error'])
+        return
+    session.last_sent_at = message.sent_at
+    if session.company_id != contact.company_id or (session.expires_at and session.expires_at < now):
+        session.company_id = contact.company_id
+        session.state, session.draft = 'idle', {}
+    text = message.text.strip()
+    n = normalized(text)
+    output, ticket = None, None
+
+    # Explicit rating command is unambiguous even while another draft is in progress.
+    rating = re.fullmatch(r'avaliar\s+([a-z]+-\d+)\s+([1-5])', n)
+    surveys = pending_surveys(contact)
+    generic_rating = session.state == 'idle' and re.fullmatch('[1-5]', n) and surveys.count() == 1
+    if rating or generic_rating:
+        survey = surveys.filter(ticket__code__iexact=rating[1]).first() if rating else surveys.first()
+        if survey:
+            survey.rating = int(rating[2] if rating else n)
+            survey.answered_at = now
+            survey.save(update_fields=['rating', 'answered_at'])
+            audit(contact.name, 'support_rating', survey, {'rating': survey.rating, 'ticket': survey.ticket.code})
+            output = f'Obrigado pela avaliação do chamado {survey.ticket.code}! Para deixar um comentário, envie FEEDBACK {survey.ticket.code} seguido do comentário.'
+        else:
+            output = 'Não encontrei uma avaliação pendente desse chamado. Confira o protocolo.'
+    elif n.startswith('feedback '):
+        parts = text.split(maxsplit=2)
+        survey = Satisfaction.objects.filter(ticket__contact=contact, ticket__company=contact.company,
+            ticket__requester_phone=contact.phone, ticket__code__iexact=parts[1], cancelled=False,
+            answered_at__isnull=False, expires_at__gt=now).order_by('-id').first() if len(parts) == 3 else None
+        if survey and len(parts[2]) <= 2000:
+            survey.feedback = parts[2]
+            survey.save(update_fields=['feedback'])
+            output = f'Comentário registrado no chamado {survey.ticket.code}. Obrigado!'
+        else:
+            output = 'Use FEEDBACK SIGLA-00001 seguido de um comentário de até 2.000 caracteres, após avaliar o chamado.'
+    elif n in ('cancelar', 'recomecar', 'reiniciar'):
+        session.state, session.draft = 'idle', {}
+        if n == 'cancelar':
+            output = 'Conversa encerrada. Seus chamados existentes continuam registrados. Quando precisar, é só chamar!'
+        else:
+            session.state = 'offer'
+            output = menu(contact)
+    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or session.state in ('idle', 'offer')):
+        ticket = Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).first()
+        if not ticket:
+            session.draft = {'target': 'Atendimento humano', 'description': text[:4000] or 'Solicitação de atendimento humano.'}
+            ticket = create_ticket(session, message)
+        else:
+            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text='Solicitou atendimento humano pelo WhatsApp.')
+            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
+        session.state, session.draft = 'human', {'ticket': ticket.pk}
+        output = f'Solicitação encaminhada à equipe no chamado {ticket.code}. Pode enviar sua mensagem por aqui.'
+    elif session.state == 'human':
+        ticket = Ticket.objects.filter(pk=session.draft.get('ticket'), contact=contact, company=contact.company).first()
+        if ticket and ticket.status in OPEN:
+            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text=text or '[Mensagem sem texto; solicite a descrição por escrito.]')
+            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
+            # Silent handoff: do not interrupt a human conversation with repeated bot replies.
+        else:
+            session.state, session.draft = 'offer', {}
+            output = menu(contact)
+    elif session.state == 'idle':
+        if re.fullmatch('[1-5]', n) and surveys.count() > 1:
+            output = 'Há mais de uma avaliação pendente. Envie AVALIAR PROTOCOLO NOTA. Protocolos: ' + ', '.join(s.ticket.code for s in surveys[:5])
+        else:
+            session.state, session.draft = 'offer', {}
+            output = menu(contact)
+    elif session.state == 'offer':
+        has_open = Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).exists()
+        if n in ('1', 'sim', 'novo', 'abrir chamado'):
+            session.state, session.draft = 'target', {}
+            output = 'Qual setor ou equipamento está afetado? Exemplo: Financeiro — computador FIN-03.'
+        elif n in ('2', 'nao') and (not has_open or n == 'nao'):
+            session.state = 'idle'
+            output = 'Tudo bem! Quando precisar de suporte, é só enviar uma mensagem.'
+        elif has_open and n in ('2', '3'):
+            session.state = 'lookup' if n == '2' else 'select_note'
+            output = 'Informe o protocolo do chamado. Exemplo: PDU-00121.'
+        else:
+            output = menu(contact)
+    elif session.state == 'target':
+        if not 2 <= len(text) <= 200:
+            output = 'Descreva o setor ou equipamento em 2 a 200 caracteres.'
+        else:
+            session.draft['target'] = text
+            session.state = 'description'
+            output = 'Descreva brevemente o problema e como ele afeta seu trabalho. Não envie senhas.'
+    elif session.state == 'description':
+        if not 5 <= len(text) <= 4000:
+            output = 'Descreva o problema por escrito, usando de 5 a 4.000 caracteres.'
+        else:
+            session.draft['description'] = text
+            session.state = 'confirm'
+            output = (f'Confira os dados:\nEmpresa: {contact.company.code}\nColaborador: {contact.name}\n'
+                      f'Setor/equipamento: {session.draft["target"]}\nProblema: {text}\n\n'
+                      '1 — Confirmar abertura\n2 — Corrigir\n3 — Cancelar')
+    elif session.state == 'confirm':
+        if n in ('1', 'sim', 'confirmar'):
+            ticket = create_ticket(session, message)
+            session.state, session.draft = 'idle', {}
+            output = f'Chamado *{ticket.code}* aberto com sucesso! Nossa equipe já foi notificada.'
+        elif n in ('2', 'corrigir'):
+            session.state, session.draft = 'target', {}
+            output = 'Vamos corrigir. Qual setor ou equipamento está afetado?'
+        elif n in ('3', 'nao'):
+            session.state, session.draft = 'idle', {}
+            output = 'Abertura cancelada. Quando precisar, é só chamar!'
+        else:
+            output = 'Responda 1 para confirmar, 2 para corrigir ou 3 para cancelar.'
+    elif session.state in ('lookup', 'select_note'):
+        ticket = Ticket.objects.filter(code__iexact=text, contact=contact, company=contact.company,
+                                       requester_phone=contact.phone).first()
+        if not ticket:
+            output = 'Não encontrei esse chamado no seu cadastro. Confira o protocolo ou envie CANCELAR.'
+        elif session.state == 'lookup':
+            last = ticket.updates.filter(internal=False).last()
+            output = f'{ticket.code} · {ticket.get_status_display()}\n' + (last.text if last else ticket.description)
+            session.state, session.draft = 'idle', {}
+        elif ticket.status not in OPEN:
+            output = 'Esse chamado já foi encerrado. Solicite à equipe a reabertura ou envie CANCELAR para iniciar outra conversa.'
+        else:
+            session.state, session.draft = 'note', {'ticket': ticket.pk}
+            output = f'Envie a informação que deseja acrescentar ao chamado {ticket.code}.'
+    elif session.state == 'note':
+        ticket = Ticket.objects.filter(pk=session.draft.get('ticket'), contact=contact, company=contact.company,
+                                       requester_phone=contact.phone, status__in=OPEN).first()
+        if ticket and text:
+            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text=text)
+            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
+            output = f'Informação acrescentada ao chamado {ticket.code}.'
+            session.state, session.draft = 'idle', {}
+        else:
+            output = 'Não foi possível acrescentar a informação. Envie o texto ou CANCELAR.'
+    else:
+        session.state, session.draft = 'offer', {}
+        output = menu(contact)
+    if output:
+        reply(message, output, ticket)
+    session.expires_at = now + timedelta(hours=24 if session.state == 'human' else 2)
+    session.save()
+    message.processed_at, message.error = now, ''
+    message.save(update_fields=['processed_at', 'error'])
+
+
+@transaction.atomic
+def update_ticket(ticket_id, actor, *, status, text, internal, expected_revision, assigned_to=None):
+    snapshot = Ticket.objects.get(pk=ticket_id)
+    Contact.objects.select_for_update().get(pk=snapshot.contact_id)
+    ticket = Ticket.objects.select_for_update().select_related('contact', 'company').get(pk=ticket_id)
+    if ticket.company_id not in company_ids(actor):
+        raise PermissionDenied
+    if ticket.revision != expected_revision:
+        raise ValidationError('O chamado foi atualizado por outra pessoa. Atualize a página antes de salvar.')
+    if status not in STATUS or (status != ticket.status and status not in TRANSITIONS[ticket.status]):
+        raise ValidationError('Essa mudança de status não é permitida.')
+    if assigned_to and (not assigned_to.is_active or not assigned_to.is_staff or
+                       ticket.company_id not in company_ids(assigned_to)):
+        raise ValidationError('O responsável não tem acesso a esta empresa.')
+    if not text.strip():
+        raise ValidationError('Descreva a atualização ou solução aplicada.')
+    if internal and status != ticket.status:
+        raise ValidationError('Mudanças de status são públicas. Use uma anotação separada para conteúdo interno.')
+    previous = ticket.status
+    ticket.status, ticket.assigned_to = status, assigned_to
+    ticket.revision += 1
+    now = timezone.now()
+    changed_resolution = status in ('resolved', 'closed') and previous not in ('resolved', 'closed')
+    if changed_resolution:
+        ticket.resolved_at = now
+    elif status in OPEN:
+        ticket.resolved_at = None
+        Satisfaction.objects.filter(ticket=ticket, answered_at__isnull=True).update(cancelled=True)
+    ticket.save()
+    update = TicketUpdate.objects.create(ticket=ticket, author=actor.get_username(), text=text,
+        internal=internal, old_status=previous, new_status=status)
+    if not internal:
+        body = f'*{ticket.code}* · {STATUS[status]}\n{text}'
+        if changed_resolution:
+            Satisfaction.objects.create(ticket=ticket, cycle=ticket.revision, expires_at=now + timedelta(days=7))
+            body += (f'\n\nComo você avalia o atendimento? Nota de 1 a 5.\n'
+                     f'Envie: AVALIAR {ticket.code} 5\nSe o problema continuar, envie ATENDENTE.')
+        queue(ticket.contact, body, f'update:{update.pk}', ticket, ticket.company_id, ticket.requester_phone)
+    audit(actor.get_username(), 'support_update', ticket, {'update': update.pk, 'from': previous,
+          'to': status, 'internal': internal, 'assigned_to': assigned_to.pk if assigned_to else None})
+    return ticket

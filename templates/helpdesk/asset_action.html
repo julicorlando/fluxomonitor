@@ -1,0 +1,6 @@
+{% extends 'helpdesk/suite_base.html' %}{% block title %}GesTi · {{ title }}{% endblock %}{% block suite_content %}
+<header class="page-heading"><div><span class="eyebrow">Inventário / {{ asset.company.code }}</span><h1>{{ title }}</h1><p>{{ asset.tag }} · {{ asset.name }}</p></div>
+<a class="button secondary" href="/support/assets/{{ asset.pk }}/">Voltar ao equipamento</a></header>
+{% include 'helpdesk/tabs.html' %}
+<article class="it-panel"><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Confirmar e registrar na auditoria</button></form></article>
+{% endblock %}

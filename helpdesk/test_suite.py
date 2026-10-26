@@ -107,9 +107,9 @@ class SupportSuiteTests(TestCase):
         Conversation.objects.create(contact=self.contact,company=self.company,state='human',draft={'ticket':ticket.pk})
         self.say('Já fiz o teste solicitado')
         ticket.refresh_from_db()
-        self.assertEqual(ticket.status,'working')
-        self.assertIsNone(ticket.sla_paused_at)
-        self.assertEqual(ticket.updates.last().text,'Já fiz o teste solicitado')
+        self.assertEqual(ticket.status,'waiting')
+        self.assertEqual(ticket.updates.count(), 1)
+        self.assertEqual(Conversation.objects.get(contact=self.contact).state, 'human')
 
     def test_legacy_clock_stays_24x7_without_adding_wait_pause(self):
         ticket=self.ticket(tracked=False)

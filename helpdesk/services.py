@@ -159,7 +159,14 @@ def process_message(message_id):
     rating = re.fullmatch(r'avaliar\s+([a-z]+-\d+)\s+([1-5])', n)
     surveys = pending_surveys(contact)
     generic_rating = re.fullmatch('[1-5]', n) and surveys.exists()
-    if rating or generic_rating:
+    # Atendimento humano é um modo silencioso persistente, mesmo quando há
+    # avaliação pendente: não iniciar, retomar ou responder pelo chatbot.
+    if session.state == 'human':
+        pass
+    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or (session.state in ('idle', 'offer') and not surveys.exists())):
+        session.state, session.draft = 'human', {}
+        audit(contact.name, 'support_human_only', session, {'contact_id': contact.pk})
+    elif rating or generic_rating:
         survey = surveys.filter(ticket__code__iexact=rating[1]).first() if rating else surveys.first()
         if survey and int(message.sent_at.timestamp()) < int(survey.created_at.timestamp()):
             output = 'Recebi uma mensagem anterior ao encerramento. Para avaliar agora:\n' + survey_prompt(survey)
@@ -197,24 +204,6 @@ def process_message(message_id):
             output = 'Conversa encerrada. Seus chamados existentes continuam registrados. Quando precisar, é só chamar!'
         else:
             session.state = 'offer'
-            output = menu(contact)
-    elif n in ('atendente', 'falar com atendente', '4') and (n != '4' or session.state in ('idle', 'offer')):
-        ticket = Ticket.objects.filter(contact=contact, company=contact.company, status__in=OPEN).first()
-        if not ticket:
-            session.draft = {'target': 'Atendimento humano', 'description': text[:4000] or 'Solicitação de atendimento humano.'}
-            ticket = create_ticket(session, message)
-        else:
-            TicketUpdate.objects.create(ticket=ticket, author=contact.name, text='Solicitou atendimento humano pelo WhatsApp.')
-            Ticket.objects.filter(pk=ticket.pk).update(updated_at=now, revision=ticket.revision + 1)
-        session.state, session.draft = 'human', {'ticket': ticket.pk}
-        output = f'Solicitação encaminhada à equipe no chamado {ticket.code}. Pode enviar sua mensagem por aqui.'
-    elif session.state == 'human':
-        ticket = Ticket.objects.filter(pk=session.draft.get('ticket'), contact=contact, company=contact.company).first()
-        if ticket and ticket.status in OPEN:
-            requester_note(ticket,contact,text or '[Mensagem sem texto; solicite a descrição por escrito.]',now)
-            # Silent handoff: do not interrupt a human conversation with repeated bot replies.
-        else:
-            session.state, session.draft = 'offer', {}
             output = menu(contact)
     elif session.state == 'idle':
         session.state, session.draft = 'offer', {}
@@ -312,7 +301,7 @@ def process_message(message_id):
         output = menu(contact)
     if output:
         reply(message, output, ticket)
-    session.expires_at = now + timedelta(hours=24 if session.state == 'human' else 2)
+    session.expires_at = None if session.state == 'human' else now + timedelta(hours=2)
     session.save()
     message.processed_at, message.error = now, ''
     message.save(update_fields=['processed_at', 'error'])

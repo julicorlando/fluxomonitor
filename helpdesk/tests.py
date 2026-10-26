@@ -470,8 +470,9 @@ class HelpdeskTests(TestCase):
         self.assertFalse(Outbound.objects.exists())
 
     @patch('helpdesk.transport.session_info', return_value={'status': 'WORKING'})
-    @patch('helpdesk.transport.gateway', return_value={})
+    @patch('helpdesk.transport.gateway')
     def test_gateway_without_message_id_records_specific_diagnostic(self, gateway, info):
+        gateway.side_effect = lambda method, path, *args: ({'numberExists':True, 'chatId':self.contact.phone[1:]+'@c.us'} if method == 'GET' else {})
         self.say('Oi')
         dispatch()
         item = Outbound.objects.get()

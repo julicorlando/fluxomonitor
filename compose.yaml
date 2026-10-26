@@ -36,6 +36,8 @@ services:
       DATABASE_URL: postgres://fluxo:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@db:5432/fluxo
       ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1,web,helpdesk.shoppingcarpina.com.br
       CSRF_TRUSTED_ORIGINS: https://fluxo.axionwebdigital.com.br,https://helpdesk.shoppingcarpina.com.br
+    volumes:
+      - fluxo_inventory:/app/private_media
     depends_on:
       db:
         condition: service_healthy
@@ -132,3 +134,4 @@ volumes:
   fluxo_db:
   fluxo_whatsapp:
   fluxo_backups:
+  fluxo_inventory:

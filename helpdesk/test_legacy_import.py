@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from django.core.management import call_command, CommandError
 from django.test import TestCase
+from django.contrib.auth import get_user_model
 from helpdesk.models import Asset, Company
 
 
@@ -36,3 +37,12 @@ class LegacyInventoryImportTests(TestCase):
         self.assertEqual(Asset.objects.first().invoice_number,'NF-2026')
         call_command('import_legacy_assets',str(self.path),*args,'--apply')
         self.assertEqual(Asset.objects.count(),210)
+
+    def test_admin_import_page_renders_without_error(self):
+        admin = get_user_model().objects.create_superuser(username='import_master', password='secure-test')
+        self.client.force_login(admin)
+        response = self.client.get('/support/assets/import/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Importar 210 patrimônios')
+        self.assertContains(response, 'company_13')
+        self.assertContains(response, 'company_176')

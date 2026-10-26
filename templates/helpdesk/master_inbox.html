@@ -3,6 +3,22 @@
 {% block content %}
 <header class="page-heading"><div><span class="eyebrow">Acesso exclusivo do master</span><h1>Conversas WhatsApp</h1><p>Mensagens recebidas, respostas do atendimento e situação do envio. Apenas colaboradores cadastrados e ativos.</p></div></header>
 {% include 'helpdesk/tabs.html' %}
+<section class="box" aria-label="Mensagens pendentes de identificação">
+  <h2>Triagem de mensagens recebidas ({{ unresolved_count }})</h2>
+  <p class="muted">Mensagens que chegaram pelo WAHA mas ainda não têm telefone confirmado. A equipe master pode visualizar o conteúdo e o identificador. Por segurança, não entram no chatbot e não são associadas automaticamente a um colaborador.</p>
+  <div style="max-height:320px;overflow:auto">
+  {% for event in unresolved %}
+    <article style="padding:12px;margin:8px 0;border:1px solid var(--border,#ddd);border-radius:10px">
+      <strong>WhatsApp · Identificação pendente</strong> <small>{{ event.received_at|date:'d/m/Y H:i:s' }}</small>
+      <p style="overflow-wrap:anywhere"><small>Identificador: {{ event.sender }}</small></p>
+      <p style="white-space:pre-wrap;overflow-wrap:anywhere">{{ event.text|default:"[Mensagem sem texto]" }}</p>
+      <small>Mensagem recebida, ainda não processada pelo bot.</small>
+    </article>
+  {% empty %}
+    <p class="muted">Nenhuma mensagem pendente de identificação.</p>
+  {% endfor %}
+  </div>
+</section>
 <div class="two-columns">
   <article class="box">
     <h2>Colaboradores</h2>

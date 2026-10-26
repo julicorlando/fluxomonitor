@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from flow.whatsapp import gateway, session_info
 from .identity import phone_from_chat
-from .models import BotConfig, Contact, DeliveryAck, Inbound, Outbound, VerifiedChatIdentity
+from .models import BotConfig, Contact, DeliveryAck, Inbound, Outbound, VerifiedChatIdentity, UnresolvedInbound
 
 
 def hook_key():
@@ -171,7 +171,30 @@ def receive_event(event):
     if Inbound.objects.filter(external_id=external).exists():
         return
     # No bot session, inbox record, response or ticket for an unknown/inactive number.
-    phone = resolve_phone(payload)
+    try:
+        phone = resolve_phone(payload)
+    except ValidationError as exc:
+        # WAHA NOWEB can receive legitimate messages while /lids has no PN.
+        # Keep these quarantined for the master, not the automated bot.
+        sender = payload.get('from', '')
+        if isinstance(sender, str) and re.fullmatch(r'[0-9]+@lid', sender):
+            raw_text = payload.get('body')
+            safe_text = raw_text[:4000] if isinstance(raw_text, str) else ''
+            try:
+                stamp = float(payload.get('timestamp'))
+                sent_at = datetime.fromtimestamp(stamp, tz=dt_timezone.utc)
+            except (TypeError, ValueError, OverflowError, OSError):
+                sent_at = None
+            if sent_at and timezone.now() - timedelta(hours=24) <= sent_at <= timezone.now() + timedelta(minutes=5):
+                pending, created = UnresolvedInbound.objects.get_or_create(
+                    external_id=external, defaults={'sender': sender, 'text': safe_text, 'sent_at': sent_at})
+                if not created:
+                    UnresolvedInbound.objects.filter(pk=pending.pk).update(
+                        attempts=models.F('attempts') + 1, last_seen_at=timezone.now())
+                logging.warning('Suporte WAHA: mensagem recebida retida para triagem por LID, evento=%s', external[:80])
+                BotConfig.objects.filter(pk=1).update(last_webhook_at=timezone.now())
+                return
+        raise
     contact = Contact.objects.filter(phone=phone, active=True).first() if phone else None
     if not contact:
         return

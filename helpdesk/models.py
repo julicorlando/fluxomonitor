@@ -170,3 +170,15 @@ class VerifiedChatIdentity(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['chat_id', 'phone'], name='support_chat_identity')]
+
+
+class UnresolvedInbound(models.Model):
+    """Quarantined WhatsApp message; never enters the bot without verified identity."""
+    external_id = models.CharField(max_length=250, unique=True)
+    sender = models.CharField(max_length=100, db_index=True)
+    text = models.TextField(max_length=4000, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+    attempts = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=24, default='unresolved')

@@ -16,7 +16,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from .forms import ContactForm, GrantForm, UpdateForm
-from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket
+from .models import AgentGrant, BotConfig, Company, Contact, Conversation, Inbound, Outbound, Ticket, UnresolvedInbound
 from .services import OPEN, audit, company_ids, update_ticket, menu
 from .transport import receive_event, valid_signature
 
@@ -283,7 +283,9 @@ def master_inbox(request, contact_id=None):
         key=lambda item: (item[0], item[2].pk))
     conversation = Conversation.objects.filter(contact=selected).first() if selected else None
     inbound_pending = Inbound.objects.filter(contact=selected, processed_at__isnull=True).count() if selected else 0
+    unresolved = UnresolvedInbound.objects.filter(status='unresolved').order_by('-received_at')[:100]
     return render(request, 'helpdesk/master_inbox.html', {
+        'unresolved': unresolved, 'unresolved_count': UnresolvedInbound.objects.filter(status='unresolved').count(),
         'contacts': contacts, 'selected': selected, 'history': history,
         'conversation': conversation, 'inbound_pending': inbound_pending,
     })

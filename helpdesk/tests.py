@@ -544,7 +544,7 @@ class HelpdeskTests(TestCase):
             if '/lids/' in path:
                 return {'pn': None}
             if 'check-exists' in path:
-                return {'numberExists': True, 'chatId': lid, 'pn': self.contact.phone[1:] + '@c.us'}
+                return {'numberExists': True, 'chatId': lid if self.contact.phone[1:] in path else self.other.phone[1:] + '@c.us', 'pn': self.contact.phone[1:] + '@c.us' if self.contact.phone[1:] in path else self.other.phone[1:] + '@c.us'}
             raise AssertionError(path)
         gateway.side_effect = response
         event = self.payload('Oi', **{'from': lid})

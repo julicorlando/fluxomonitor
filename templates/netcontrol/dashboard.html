@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}NetControl · Infraestrutura{% endblock %}
+{% block content %}
+<section class="page-header"><h1>NetControl · Infraestrutura</h1><p>Inventário e mapa de conexões da rede. Coletas somente leitura.</p></section>
+<div class="cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px">
+<article class="card" style="padding:16px"><strong>Equipamentos</strong><h2>{{ total }}</h2></article>
+<article class="card" style="padding:16px"><strong>Online</strong><h2>{{ online }}</h2></article>
+<article class="card" style="padding:16px"><strong>Ainda não verificados</strong><h2>{{ unknown }}</h2></article>
+</div>
+<p><a class="button" href="/admin/netcontrol/networkasset/">Cadastrar equipamentos</a> · <a href="/admin/netcontrol/networklink/">Gerenciar conexões</a> · <a href="/admin/netcontrol/site/">Unidades</a></p>
+<form method="get"><label for="site-filter">Unidade</label><select id="site-filter" name="site"><option value="">Todas</option>{% for s in sites %}<option value="{{ s.pk }}" {% if selected == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select><button type="submit">Filtrar</button></form>
+<h2>Mapa de conexões</h2>
+<div style="overflow:auto;border:1px solid var(--border,#8885);border-radius:12px;padding:12px;margin-bottom:20px">
+<svg id="network-map" viewBox="0 0 980 400" role="img" aria-label="Mapa de equipamentos e conexões" style="width:100%;min-width:650px;max-height:500px"></svg>
+<p id="topology-note" class="muted">As conexões são cadastradas manualmente ou importadas de fontes verificadas; não representam descoberta física automática.</p></div>
+<h2>Inventário</h2>
+<div style="overflow:auto"><table><thead><tr><th>Equipamento</th><th>Tipo</th><th>IP</th><th>Localização</th><th>Estado</th></tr></thead><tbody>
+{% for a in assets %}<tr><td><a href="/admin/netcontrol/networkasset/{{ a.pk }}/change/">{{ a.name }}</a></td><td>{{ a.get_kind_display }}</td><td>{{ a.ip|default:"—" }}</td><td>{{ a.location|default:"—" }}</td><td>{{ a.last_status }}</td></tr>
+{% empty %}<tr><td colspan="5">Nenhum equipamento cadastrado. Utilize o botão acima.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}
+{% block scripts %}<script>
+(async () => {
+  const svg=document.getElementById('network-map'),ns='http://www.w3.org/2000/svg';
+  const response=await fetch('/netcontrol/topology.json'+window.location.search,{credentials:'same-origin'});
+  if(!response.ok)return;
+  const {nodes,links}=await response.json();
+  if(!nodes.length){document.getElementById('topology-note').textContent='Cadastre equipamentos para construir o mapa.';return;}
+  const positions=new Map();
+  nodes.forEach((n,i)=>{let a=2*Math.PI*i/nodes.length;positions.set(n.id,{x:490+Math.cos(a)*Math.min(390,130+nodes.length*15),y:200+Math.sin(a)*160})});
+  function element(tag,attrs,text){let e=document.createElementNS(ns,tag);for(let [k,v] of Object.entries(attrs))e.setAttribute(k,String(v));if(text!==undefined)e.textContent=String(text);svg.append(e);return e}
+  links.forEach(l=>{let a=positions.get(l.source_id),b=positions.get(l.target_id);if(a&&b){let line=element('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:l.evidence==='manual'?'#64748b':'#16a34a','stroke-width':2,'stroke-dasharray':l.evidence==='inferred'?'6 4':'none'});let title=document.createElementNS(ns,'title');title.textContent=l.evidence+' '+(l.source_interface__name||'');line.append(title)}});
+  nodes.forEach(n=>{let p=positions.get(n.id);element('rect',{x:p.x-65,y:p.y-18,width:130,height:36,rx:8,fill:n.last_status==='online'?'#047857':n.last_status==='offline'?'#b91c1c':'#334155'});element('text',{x:p.x,y:p.y+4,'font-size':11,'text-anchor':'middle',fill:'#fff'},n.name.length>21?n.name.slice(0,20)+'…':n.name)});
+})();
+</script>{% endblock %}

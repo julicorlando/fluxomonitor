@@ -1,7 +1,18 @@
 from django.contrib.admin.views.decorators import staff_member_required
-from django.shortcuts import render
+from django.shortcuts import render, redirect
+from django.contrib import messages
 from django.http import JsonResponse
 from .models import NetworkAsset, NetworkLink, Site
+from .forms import NetworkAssetForm
+
+@staff_member_required
+def asset_create(request):
+    form = NetworkAssetForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        asset = form.save()
+        messages.success(request, f'Equipamento “{asset.name}” cadastrado. Configure o segredo no ambiente do servidor antes de habilitar a coleta.')
+        return redirect('netcontrol-dashboard')
+    return render(request, 'netcontrol/asset_form.html', {'form': form})
 
 @staff_member_required
 def dashboard(request):

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Adicionar equipamento · NetControl{% endblock %}
+{% block head %}<style>
+.nc-wrap{max-width:960px;margin:0 auto;padding:12px 16px 48px}.nc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:8px 0 22px}.nc-head h1{margin:0 0 7px}.nc-muted{opacity:.76}.nc-steps{display:flex;gap:8px;margin:20px 0}.nc-step{padding:8px 13px;border:1px solid var(--border,#8885);border-radius:999px;font-size:.9rem}.nc-step b{margin-right:7px}.nc-card{border:1px solid var(--border,#8885);background:var(--card,rgba(127,127,127,.06));border-radius:16px;padding:22px;margin:14px 0}.nc-card h2{margin:0 0 5px;font-size:1.15rem}.nc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.nc-field{display:flex;flex-direction:column;gap:6px}.nc-field label{font-weight:600;font-size:.93rem}.nc-field input,.nc-field select,.nc-field textarea{width:100%;box-sizing:border-box}.nc-wide{grid-column:1/-1}.nc-help{font-size:.84rem;opacity:.75}.nc-error{color:#dc2626;font-size:.85rem}.nc-callout{border-left:4px solid #0ea5e9;padding:12px 15px;background:rgba(14,165,233,.08);border-radius:8px;margin-top:16px}.nc-check{display:flex;gap:10px;align-items:center}.nc-actions{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:20px}.nc-actions-right{display:flex;gap:10px}@media(max-width:650px){.nc-grid{grid-template-columns:1fr}.nc-wide{grid-column:auto}.nc-head{display:block}.nc-card{padding:17px}.nc-actions{align-items:stretch;flex-direction:column-reverse}.nc-actions-right{justify-content:flex-end}}
+</style>{% endblock %}
+{% block content %}
+<div class="nc-wrap">
+  <header class="nc-head"><div><p class="nc-muted"><a href="{% url 'netcontrol-dashboard' %}">NetControl</a> / Inventário</p><h1>Adicionar equipamento</h1><p class="nc-muted">Cadastre o dispositivo e indique como o coletor poderá consultá-lo.</p></div><a href="{% url 'netcontrol-dashboard' %}">Voltar ao painel</a></header>
+  <div class="nc-steps" aria-label="Etapas do cadastro"><span class="nc-step"><b>1</b> Equipamento</span><span class="nc-step"><b>2</b> Acesso de leitura</span></div>
+  <form method="post" novalidate>{% csrf_token %}
+    {% if form.non_field_errors %}<div class="nc-callout nc-error">{{ form.non_field_errors }}</div>{% endif %}
+    <section class="nc-card"><h2>Identificação e localização</h2><p class="nc-muted">Esses dados organizam o inventário e o mapa de rede.</p><div class="nc-grid">
+      {% for field in form %}{% if field.name == 'protocol' or field.name == 'username' or field.name == 'credential_env' or field.name == 'verify_tls' or field.name == 'enabled' %}{% else %}<div class="nc-field {% if field.name == 'name' or field.name == 'location' %}nc-wide{% endif %}">{{ field.label_tag }}{{ field }}{% if field.help_text %}<span class="nc-help">{{ field.help_text }}</span>{% endif %}{% for error in field.errors %}<span class="nc-error">{{ error }}</span>{% endfor %}</div>{% endif %}{% endfor %}
+    </div></section>
+    <section class="nc-card"><h2>Acesso de monitoramento</h2><p class="nc-muted">O NetControl começa somente com consultas de leitura.</p><div class="nc-grid">
+      <div class="nc-field nc-wide">{{ form.protocol.label_tag }}{{ form.protocol }}<span class="nc-help">Sem coleta deixa o equipamento apenas no inventário. Selecione o método compatível com o equipamento. O coletor atual consulta RouterOS REST v7; SNMP v2c está previsto no cadastro e ainda depende da implementação do coletor.</span>{% for error in form.protocol.errors %}<span class="nc-error">{{ error }}</span>{% endfor %}</div>
+      <div class="nc-field nc-access">{{ form.username.label_tag }}{{ form.username }}<span class="nc-help">Usuário dedicado e restrito a consultas. Usado pelo RouterOS REST.</span>{% for error in form.username.errors %}<span class="nc-error">{{ error }}</span>{% endfor %}</div>
+      <div class="nc-field nc-access">{{ form.credential_env.label_tag }}{{ form.credential_env }}<span class="nc-help">Informe somente o nome da variável. Cadastre o valor secreto no ambiente do serviço no Coolify.</span>{% for error in form.credential_env.errors %}<span class="nc-error">{{ error }}</span>{% endfor %}</div>
+      <label class="nc-check nc-wide">{{ form.verify_tls }}<span>Exigir certificado HTTPS válido</span></label>
+      <label class="nc-check nc-wide">{{ form.enabled }}<span>Habilitar coleta para este equipamento (deixe desmarcado até cadastrar o segredo no servidor)</span></label>
+    </div><div class="nc-callout"><strong>Segredo protegido:</strong> não cole senhas nem comunidades SNMP aqui. O formulário salva somente o nome da variável de ambiente; o segredo deve ser definido no serviço do coletor no Coolify. Não desative a validação TLS.</div></section>
+    <div class="nc-actions"><span class="nc-help">Os dados podem ser ajustados depois no inventário.</span><div class="nc-actions-right"><a class="button" href="{% url 'netcontrol-dashboard' %}">Cancelar</a><button class="button" type="submit">Salvar equipamento</button></div></div>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+(() => {const protocol=document.getElementById('id_protocol');const access=document.querySelectorAll('.nc-access');function sync(){const enabled=protocol&&protocol.value!=='none';access.forEach(el=>{el.hidden=!enabled});}if(protocol){protocol.addEventListener('change',sync);sync();}})();
+</script>{% endblock %}

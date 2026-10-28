@@ -7,7 +7,7 @@
 <article class="card" style="padding:16px"><strong>Online</strong><h2>{{ online }}</h2></article>
 <article class="card" style="padding:16px"><strong>Ainda não verificados</strong><h2>{{ unknown }}</h2></article>
 </div>
-<p><a class="button" href="/admin/netcontrol/networkasset/">Cadastrar equipamentos</a> · <a href="/admin/netcontrol/networklink/">Gerenciar conexões</a> · <a href="/admin/netcontrol/site/">Unidades</a></p>
+<p><a class="button" href="{% url 'netcontrol-asset-create' %}">+ Adicionar equipamento</a> · <a href="/admin/netcontrol/networkasset/">Inventário completo</a> · <a href="/admin/netcontrol/networklink/">Gerenciar conexões</a> · <a href="/admin/netcontrol/site/">Unidades</a></p>
 <form method="get"><label for="site-filter">Unidade</label><select id="site-filter" name="site"><option value="">Todas</option>{% for s in sites %}<option value="{{ s.pk }}" {% if selected == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select><button type="submit">Filtrar</button></form>
 <h2>Mapa de conexões</h2>
 <div style="overflow:auto;border:1px solid var(--border,#8885);border-radius:12px;padding:12px;margin-bottom:20px">

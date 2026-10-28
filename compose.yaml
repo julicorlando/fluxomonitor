@@ -33,6 +33,7 @@ services:
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:?Configure WAHA_API_KEY}
       SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY}
+      NETCONTROL_ROUTER1_PASSWORD: ${NETCONTROL_ROUTER1_PASSWORD:-}
       DATABASE_URL: postgres://fluxo:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@db:5432/fluxo
       ALLOWED_HOSTS: fluxo.axionwebdigital.com.br,10.0.0.147,localhost,127.0.0.1,web,helpdesk.shoppingcarpina.com.br
       CSRF_TRUSTED_ORIGINS: https://fluxo.axionwebdigital.com.br,https://helpdesk.shoppingcarpina.com.br
@@ -51,6 +52,14 @@ services:
       PFC_POLL_SECONDS: ${PFC_POLL_SECONDS:-3}
       PFC_HISTORY_PAUSE_SECONDS: ${PFC_HISTORY_PAUSE_SECONDS:-1}
     command: ["python", "manage.py", "poll_pfc"]
+    depends_on:
+      web:
+        condition: service_healthy
+  netcontrol_collector:
+    build: .
+    restart: unless-stopped
+    environment: *env
+    command: ["/bin/sh", "-c", "while true; do python manage.py poll_network; sleep 120; done"]
     depends_on:
       web:
         condition: service_healthy

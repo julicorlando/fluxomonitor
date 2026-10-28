@@ -58,7 +58,9 @@ services:
   netcontrol_collector:
     build: .
     restart: unless-stopped
-    environment: *env
+    environment:
+      <<: *env
+      CRED_SG2: ${CRED_SG2:-}
     command: ["/bin/sh", "-c", "while true; do python manage.py poll_network; sleep 120; done"]
     depends_on:
       web:

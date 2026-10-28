@@ -2,17 +2,47 @@ import os
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from netcontrol.models import NetworkAsset, Interface, PollHistory
+from netcontrol.snmp import collect_snmp
+
+def poll_snmp_asset(asset):
+    if not asset.ip or not asset.credential_env:
+        raise ValueError('Configure IP e variável de ambiente da comunidade SNMP.')
+    community = os.getenv(asset.credential_env)
+    if not community:
+        raise ValueError('Variável de ambiente da comunidade SNMP não disponível no coletor.')
+    result = collect_snmp(asset.ip, community)
+    for item in result['interfaces']:
+        Interface.objects.update_or_create(
+            asset=asset,
+            index=item['index'],
+            defaults={
+                'name': item['name'],
+                'status': item.get('status', 'unknown'),
+                'speed_bps': item.get('speed_bps'),
+                'mac': item.get('mac', ''),
+            },
+        )
+    count = len(result['interfaces'])
+    return f'{count} interfaces consultadas via SNMP'
 
 class Command(BaseCommand):
-    help='Consulta dispositivos via RouterOS REST HTTPS somente leitura (sem alterações no equipamento).'
+    help='Consulta RouterOS REST e SNMP v2c em modo somente leitura.'
     def add_arguments(self, parser):
         parser.add_argument('--asset', type=int)
     def handle(self,*args,**options):
         import requests
-        assets=NetworkAsset.objects.filter(enabled=True,protocol='routeros')
+        assets=NetworkAsset.objects.filter(enabled=True,protocol__in=('routeros','snmp'))
         if options['asset']:assets=assets.filter(pk=options['asset'])
         for a in assets:
             try:
+                if a.protocol=='snmp':
+                    detail=poll_snmp_asset(a)
+                    a.last_status='online';a.last_error=''
+                    success=True
+                    a.last_checked=timezone.now();a.save(update_fields=['last_status','last_checked','last_error'])
+                    PollHistory.objects.create(asset=a,successful=True,detail=detail)
+                    self.stdout.write(f'{a.name}: {detail}')
+                    continue
                 if not a.ip or not a.username or not a.credential_env or not os.getenv(a.credential_env):
                     raise ValueError('Configure IP, usuário e variável de ambiente de credenciais')
                 if not a.verify_tls: raise ValueError('TLS não verificado: configure certificado válido')
